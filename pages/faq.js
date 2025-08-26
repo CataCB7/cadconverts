@@ -1,0 +1,1 @@
+export default ()=> (<div className='container'><div className='nav'><div className='brand'>CadConverts</div><a className='btn ghost' href='/'>Home</a></div><div className='card'><h1>FAQ</h1><p>DWG support uses Autodesk Forge when configured. PDF output is available for DWG/DXF.</p></div></div>)

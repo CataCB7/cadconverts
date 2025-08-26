@@ -1,0 +1,1 @@
+export default ()=> (<div className='container'><div className='nav'><div className='brand'>CadConverts</div><a className='btn ghost' href='/'>Home</a></div><div className='card'><h1>Pricing</h1><p>Free: 2 conversions</p><p>Basic: $9.99/mo (≤20MB)</p><p>Pro: $29.99/mo (≤100MB, priority)</p></div></div>)

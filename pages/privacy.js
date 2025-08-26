@@ -1,0 +1,1 @@
+export default ()=> (<div className='container'><div className='nav'><div className='brand'>CadConverts</div><a className='btn ghost' href='/'>Home</a></div><div className='card'><h1>Privacy</h1><p>We process files only for conversion and delete temporary files after processing.</p></div></div>)
