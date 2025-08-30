@@ -49,8 +49,8 @@ export default function Pricing() {
 
         <div className="row">
           <a href="#try" className="btn ghost">Try Free (2 conversions)</a>
-          <a href="https://buy.stripe.com/YOUR_BASIC_PAYMENT_LINK" className="btn">Get Basic – $9.99/mo</a>
-          <a href="https://buy.stripe.com/YOUR_PRO_PAYMENT_LINK" className="btn">Get Pro – $29.99/mo</a>
+          <a href="https://buy.stripe.com/cNieVc4cpdPp4tp86BeIw00" className="btn">Get Basic – $9.99/mo</a>
+          <a href="https://buy.stripe.com/00wcN47oB26H0d9cmReIw01" className="btn">Get Pro – $29.99/mo</a>
         </div>
       </div>
     </section>
