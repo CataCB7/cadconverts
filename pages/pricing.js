@@ -26,7 +26,7 @@ export default () => (
           <p>DWG, DXF, STEP, STL, IGES, OBJ</p>
           <button
             className='btn'
-            onClick={() => window.location.href="https://buy.stripe.com/test_8x26oGczPdR4a8m1Iu3AY00"}
+            onClick={() => window.location.href="https://buy.stripe.com/cNieVc4cpdPp4tp86BeIw00"}
           >
             Choose Basic
           </button>
@@ -39,7 +39,7 @@ export default () => (
           <p>Priority processing</p>
           <button
             className='btn'
-            onClick={() => window.location.href="https://buy.stripe.com/test_28E6oG6br6oCgwK5YK3AY01"}
+            onClick={() => window.location.href="https://buy.stripe.com/00wcN47oB26H0d9cmReIw01"}
           >
             Choose Pro
           </button>
