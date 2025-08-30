@@ -10,52 +10,50 @@ const features = [
 
 export default function Pricing() {
   return (
-    <section id="pricing" className="max-w-5xl mx-auto px-6 py-14">
-      <h2 className="text-3xl font-bold text-center">Pricing</h2>
-      <p className="text-center text-gray-600 mt-2">Start free. Upgrade when you need more.</p>
+    <section id="pricing" className="section">
+      <div className="container">
+        <h2 className="h1" style={{fontSize:28, textAlign:'center'}}>Pricing</h2>
+        <p className="lead" style={{textAlign:'center'}}>Start free. Upgrade when you need more.</p>
 
-      <div className="overflow-x-auto mt-8 rounded-2xl border">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="p-4">Feature / Plan</th>
-              <th className="p-4">Free</th>
-              <th className="p-4">Basic – $9.99/mo</th>
-              <th className="p-4">Pro – $29.99/mo</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="border-t">
-              <td className="p-4 font-medium">Conversions included</td>
-              <td className="p-4">2</td>
-              <td className="p-4">50 / month</td>
-              <td className="p-4">150 / month</td>
-            </tr>
-            {features.map((f) => (
-              <tr key={f.label} className="border-t">
-                <td className="p-4">{f.label}</td>
-                <td className="p-4">{f.free}</td>
-                <td className="p-4">{f.basic}</td>
-                <td className="p-4">{f.pro}</td>
+        <div className="card" style={{marginTop:18}}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Feature / Plan</th>
+                <th>Free</th>
+                <th>Basic – $9.99/mo</th>
+                <th>Pro – $29.99/mo</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>Conversions included</b></td>
+                <td>2</td>
+                <td>50 / month</td>
+                <td>150 / month</td>
+              </tr>
+              {features.map((f) => (
+                <tr key={f.label}>
+                  <td>{f.label}</td>
+                  <td>{f.free}</td>
+                  <td>{f.basic}</td>
+                  <td>{f.pro}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted" style={{color:'var(--muted)', marginTop:8}}>
+            Cloud-required conversions use Autodesk Platform Services (Forge). Costs are covered by your plan.
+          </p>
+        </div>
 
-      <div className="mt-6 grid md:grid-cols-3 gap-4">
-        <a href="#try" className="px-5 py-3 rounded-xl border text-center">Try Free (2 conversions)</a>
-        <a href="https://buy.stripe.com/YOUR_BASIC_PAYMENT_LINK" className="px-5 py-3 rounded-xl bg-black text-white text-center">
-          Get Basic – $9.99/mo
-        </a>
-        <a href="https://buy.stripe.com/YOUR_PRO_PAYMENT_LINK" className="px-5 py-3 rounded-xl bg-black text-white text-center">
-          Get Pro – $29.99/mo
-        </a>
+        <div className="row">
+          <a href="#try" className="btn ghost">Try Free (2 conversions)</a>
+          <a href="https://buy.stripe.com/YOUR_BASIC_PAYMENT_LINK" className="btn">Get Basic – $9.99/mo</a>
+          <a href="https://buy.stripe.com/YOUR_PRO_PAYMENT_LINK" className="btn">Get Pro – $29.99/mo</a>
+        </div>
       </div>
-
-      <p className="text-xs text-gray-500 mt-4">
-        Cloud-required conversions use Autodesk Platform Services (Forge). Costs are covered by your plan.
-      </p>
     </section>
   );
 }
+
