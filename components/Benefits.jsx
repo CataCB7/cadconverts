@@ -5,13 +5,17 @@ export default function Benefits() {
     { title: "Secure & Private", desc: "Cloud processing via trusted infrastructure. Stripe payments." },
   ];
   return (
-    <section className="max-w-5xl mx-auto px-6 py-10 grid md:grid-cols-3 gap-6">
-      {items.map((i) => (
-        <div key={i.title} className="p-6 rounded-2xl border">
-          <h3 className="font-semibold text-lg">{i.title}</h3>
-          <p className="text-gray-600 mt-2">{i.desc}</p>
+    <section className="section">
+      <div className="container">
+        <div className="grid-3">
+          {items.map((i) => (
+            <div key={i.title} className="card">
+              <h3 className="font-semibold text-lg">{i.title}</h3>
+              <p className="lead" style={{marginTop:8}}>{i.desc}</p>
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </section>
   );
 }
