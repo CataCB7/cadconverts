@@ -1,14 +1,78 @@
-:root{--bg:#0b0e13;--card:#121826;--muted:#9aa3b2;--line:#1f2635;--brand:#60a5fa;--btn:#2563eb;}
-html,body{margin:0;padding:0;background:var(--bg);color:#e8eaf0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+:root{
+  --bg:#0b0e13;
+  --card:#121826;
+  --muted:#9aa3b2;
+  --line:#1f2635;
+  --brand:#60a5fa;
+  --btn:#2563eb;
+}
+
+/* Base */
+html,body{
+  margin:0;padding:0;
+  background:var(--bg);
+  color:#e8eaf0;
+  font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial
+}
 a{color:var(--brand);text-decoration:none}
-.nav{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;background:#0f1420;border-bottom:1px solid var(--line)}
+
+/* Top nav (dacă o folosești pe alte pagini) */
+.nav{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:18px 20px;background:#0f1420;border-bottom:1px solid var(--line)
+}
 .brand{font-weight:800;color:var(--brand)}
+
+/* Layout helpers */
 .container{max-width:1000px;margin:0 auto;padding:24px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:18px}
-.input,select{width:100%;padding:12px;border-radius:10px;background:#0f1420;color:#fff;border:1px solid var(--line)}
-.btn{background:var(--btn);color:#fff;border:none;padding:12px 16px;border-radius:10px;font-weight:700;cursor:pointer}
+.section{padding:40px 0}
+.text-center{text-align:center}
+
+/* Cards / inputs / buttons */
+.card{
+  background:var(--card);border:1px solid var(--line);
+  border-radius:14px;padding:20px;margin-bottom:18px
+}
+.input,select{
+  width:100%;padding:12px;border-radius:10px;
+  background:#0f1420;color:#fff;border:1px solid var(--line)
+}
+.btn{
+  background:var(--btn);color:#fff;border:none;
+  padding:12px 16px;border-radius:10px;font-weight:700;cursor:pointer
+}
 .btn.ghost{background:transparent;border:1px solid var(--brand);color:var(--brand)}
 .kpi{background:#0f1420;border:1px solid var(--line);padding:10px;border-radius:12px;text-align:center}
+
+/* Grids */
 .grid{display:grid;gap:16px}
 .two{grid-template-columns:1fr 1fr}
+.grid-3{display:grid;gap:16px;grid-template-columns:repeat(3,1fr)}
+@media (max-width:900px){
+  .two{grid-template-columns:1fr}
+  .grid-3{grid-template-columns:1fr}
+}
+
+/* Typography helpers */
+.h1{font-size:34px;font-weight:800;line-height:1.2;margin:0}
+.lead{color:var(--muted);font-size:18px;margin-top:10px}
+
+/* Small UI bits */
+.row{display:flex;gap:12px;justify-content:center;align-items:center;margin-top:16px}
+.badge{display:inline-flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin-top:10px}
+.badge i{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:#0f1420;border:1px solid var(--line)}
+
+/* Pricing table */
+.table{width:100%;border-collapse:collapse}
+.table th,.table td{padding:12px 14px;border-top:1px solid var(--line);vertical-align:top}
+.table thead th{background:#0f1420;font-weight:700}
+.table caption{caption-side:bottom;text-align:left;color:var(--muted);font-size:12px;margin-top:8px}
+
+/* FAQ */
+.faq details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+.faq summary{cursor:pointer;font-weight:600}
+.faq p{color:var(--muted);margin-top:8px}
+
+/* Footer */
 .footer{font-size:12px;color:var(--muted);text-align:center;margin:30px 0}
+
