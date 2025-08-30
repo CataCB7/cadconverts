@@ -6,15 +6,17 @@ export default function FAQ() {
     { q: "Which formats are supported?", a: "STEP, IGES, STL, OBJ, DWG, DXF, PDF, and Inventor IPT/IAM (Pro). Catia/SolidWorks coming soon." },
   ];
   return (
-    <section className="max-w-4xl mx-auto px-6 py-12">
-      <h2 className="text-2xl font-bold">FAQ</h2>
-      <div className="mt-6 space-y-6">
-        {rows.map((r) => (
-          <details key={r.q} className="rounded-xl border p-4">
-            <summary className="cursor-pointer font-medium">{r.q}</summary>
-            <p className="text-gray-600 mt-2">{r.a}</p>
-          </details>
-        ))}
+    <section className="section">
+      <div className="container faq">
+        <h2 className="h1" style={{fontSize:24}}>FAQ</h2>
+        <div className="grid" style={{gap:12, marginTop:12}}>
+          {rows.map((r) => (
+            <details key={r.q}>
+              <summary>{r.q}</summary>
+              <p>{r.a}</p>
+            </details>
+          ))}
+        </div>
       </div>
     </section>
   );
