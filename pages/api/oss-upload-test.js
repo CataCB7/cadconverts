@@ -1,12 +1,14 @@
 // /pages/api/oss-upload-test.js
 import * as aps from "../../lib/aps";
+import { Agent } from "undici"; // built-in în Node 18+ (folosit de fetch)
 
 export const config = {
   runtime: "nodejs",
-  regions: ["iad1"],     // <- US-East (Washington DC)
+  regions: ["iad1"], // US-East
 };
 
-const OSS_HOST = "https://oss.api.autodesk.com"; // hostul OSS v2
+const OSS_HOST = "https://oss.api.autodesk.com";
+const ipv4Agent = new Agent({ connect: { family: 4, hostname: "oss.api.autodesk.com" } });
 
 export default async function handler(req, res) {
   try {
@@ -27,7 +29,7 @@ export default async function handler(req, res) {
       Connection: "keep-alive",
     };
 
-    const up = await fetch(url, { method: "PUT", headers, body: data });
+    const up = await fetch(url, { method: "PUT", headers, body: data, dispatcher: ipv4Agent });
     const text = await up.text().catch(()=>"(no body)");
     const respHeaders = {}; up.headers.forEach((v,k)=>respHeaders[k]=v);
 
