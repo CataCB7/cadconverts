@@ -165,42 +165,56 @@ export default function Home() {
       <Benefits />
 
       {/* UI-ul tău de conversie */}
-      <div className="container mx-auto px-6 py-12">
-        <div className="p-6 rounded-2xl border">
-          <h1 className="text-2xl font-bold mb-4">Free Trial Converter</h1>
-          <p>2 free conversions. STEP/IGES are converted in your browser. DWG/DXF → PDF via server API.</p>
+      <div id="convert" className="container">
+        <div className="card">
+          <h1 className="h1" style={{fontSize:24, marginBottom:12}}>Free Trial Converter</h1>
+          <p className="lead">2 free conversions. STEP/IGES are converted in your browser. DWG/DXF → PDF via server API.</p>
 
-          <div className="grid md:grid-cols-2 gap-6 mt-6">
-            <div>
+          <div className="grid two" style={{marginTop:16}}>
+            <div className="card">
               <h3 className="font-semibold">1) Choose file</h3>
-              <input className="mt-2" type="file" ref={fileRef}
+              <input type="file" ref={fileRef}
+                     className="input"
                      accept=".step,.stp,.iges,.igs,.stl,.obj,.dwg,.dxf,.pdf" />
-              <p className="text-sm text-gray-500 mt-2">
-                Free on-device: STEP/STP, IGES/IGS → STL/OBJ. Others fallback to server.
+              <p className="lead" style={{marginTop:8, fontSize:13}}>
+                Free on-device: <b>STEP/STP, IGES/IGS → STL/OBJ</b>. Others fallback to server.
               </p>
             </div>
-            <div>
+
+            <div className="card">
               <h3 className="font-semibold">2) Options</h3>
-              <label className="block mt-2">Output format</label>
-              <select className="border rounded p-2 w-full mt-1" value={format} onChange={e=>setFormat(e.target.value)}>
-                <option value="stl">STL (.stl)</option>
-                <option value="obj">OBJ (.obj)</option>
-                <option value="step">STEP (.step/.stp)</option>
-                <option value="iges">IGES (.igs/.iges)</option>
-                <option value="dxf">DXF (.dxf)</option>
-                <option value="pdf">PDF (.pdf) — DWG/DXF only</option>
-              </select>
-              <label className="block mt-4">Email</label>
-              <input className="border rounded p-2 w-full mt-1" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@email.com" />
-              <button className="mt-4 px-4 py-2 rounded bg-black text-white"
-                      onClick={handleConvert}
-                      disabled={uploading}>
-                {uploading ? 'Converting…' : 'Convert & Download'}
-              </button>
-              <p className="text-sm text-gray-600 mt-2">Trial left: {remaining}</p>
+
+              <div className="form-group">
+                <label className="form-label">Output format</label>
+                <select className="input" value={format} onChange={e=>setFormat(e.target.value)}>
+                  <option value="stl">STL (.stl)</option>
+                  <option value="obj">OBJ (.obj)</option>
+                  <option value="step">STEP (.step/.stp)</option>
+                  <option value="iges">IGES (.igs/.iges)</option>
+                  <option value="dxf">DXF (.dxf)</option>
+                  <option value="pdf">PDF (.pdf) — DWG/DXF only</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Email</label>
+                <div className="form-row">
+                  <input className="input" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@email.com" />
+                  <button className="btn" onClick={handleConvert} disabled={uploading} style={{whiteSpace:'nowrap', padding:'12px 18px'}}>
+                    {uploading ? 'Converting…' : 'Convert & Download'}
+                  </button>
+                </div>
+              </div>
+
+              <p className="lead" style={{marginTop:8, fontSize:13}}>
+                Trial left: {remaining}
+              </p>
             </div>
           </div>
-          <p className="text-xs text-gray-500 mt-4">Files ≤20MB on Free/Basic. Pro supports up to 100MB and assemblies.</p>
+
+          <p className="lead" style={{marginTop:8, fontSize:12}}>
+            Files ≤20MB on Free/Basic. Pro supports up to 100MB and assemblies.
+          </p>
         </div>
       </div>
 
