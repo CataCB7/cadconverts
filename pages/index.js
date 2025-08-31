@@ -173,11 +173,17 @@ export default function Home() {
           <div className="grid two" style={{marginTop:16}}>
             <div className="card">
               <h3 className="font-semibold">1) Choose file</h3>
-              <input type="file" ref={fileRef}
-                     className="input"
-                     accept=".step,.stp,.iges,.igs,.stl,.obj,.dwg,.dxf,.pdf,.ipt,.iam"
+              <input
+                type="file"
+                ref={fileRef}
+                className="input"
+                accept=".step,.stp,.iges,.igs,.stl,.obj,.dwg,.dxf,.pdf,.ipt,.iam"
+              />
               <p className="lead" style={{marginTop:8, fontSize:13}}>
                 Free on-device: <b>STEP/STP, IGES/IGS → STL/OBJ</b>. Others fallback to server.
+              </p>
+              <p className="lead" style={{marginTop:4, fontSize:13, color:'var(--muted)'}}>
+                Inventor (IPT/IAM) available on Pro plan — cloud conversion.
               </p>
             </div>
 
@@ -193,6 +199,9 @@ export default function Home() {
                   <option value="iges">IGES (.igs/.iges)</option>
                   <option value="dxf">DXF (.dxf)</option>
                   <option value="pdf">PDF (.pdf) — DWG/DXF only</option>
+                  <option disabled>──────────────</option>
+                  <option disabled>Inventor IPT/IAM → STEP (Pro)</option>
+                  <option disabled>Inventor IPT/IAM → STL (Pro)</option>
                 </select>
               </div>
 
