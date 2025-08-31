@@ -136,9 +136,9 @@ export default function Home() {
         a.download = `${outNameBase}.${format}`
         a.click()
       } else {
-        // ===== HOTFIX: nu mai trimitem upload; doar testăm cap-coadă cu stub =====
+        // ===== HOTFIX: GET la /api/convert cu formatul cerut (fără upload) =====
         const res = await fetch(`/api/convert?format=${encodeURIComponent(format)}`, {
-          method: 'POST'
+          method: 'GET'
         })
         if (!res.ok) throw new Error(await res.text())
         const cd = res.headers.get('content-disposition') || ''
