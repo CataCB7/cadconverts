@@ -4,11 +4,12 @@ import * as aps from "../../lib/aps";
 export const config = {
   api: { bodyParser: false },
   runtime: "nodejs",
+  regions: ["iad1"],     // <- US-East (Washington DC)
 };
 
-function rid() {
-  return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
-}
+const OSS_HOST = "https://oss.api.autodesk.com";
+
+function rid(){ return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36); }
 
 export default async function handler(req, res) {
   try {
@@ -17,39 +18,33 @@ export default async function handler(req, res) {
     const filename = (req.query.filename || "").toString().trim();
     if (!filename) return res.status(400).json({ error: "Missing ?filename=" });
 
-    // 1) body binar
-    const chunks = [];
-    for await (const ch of req) chunks.push(ch);
+    const chunks=[]; for await (const ch of req) chunks.push(ch);
     const buffer = Buffer.concat(chunks);
     if (!buffer?.length) return res.status(400).json({ error: "Empty body" });
 
-    // 2) token + bucket (US)
     const tok = await aps.getToken();
     const bucket = await aps.ensureBucket(tok.access_token);
 
-    // 3) cheie obiect
     const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
     const objectKey = `${rid()}.${ext}`;
 
-    // 4) Upload v2: **POST** pe developer host + x-ads-region: US
-    const url = `${aps.APS_BASE_URL}/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
+    const url = `${OSS_HOST}/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
     const up = await fetch(url, {
-      method: "POST",
+      method: "PUT",
       headers: {
         Authorization: `Bearer ${tok.access_token}`,
         "x-ads-region": "US",
         "Content-Type": "application/octet-stream",
         "Content-Length": String(buffer.length),
+        Connection: "keep-alive",
       },
       body: buffer,
     });
 
-    if (!up.ok) {
-      const t = await up.text().catch(() => "(no body)");
-      return res.status(up.status).json({ error: `APS upload failed ${up.status}: ${t}` });
-    }
+    const body = await up.text().catch(()=>"(no body)");
+    if (!up.ok) return res.status(up.status).json({ error: `APS upload failed ${up.status}: ${body}` });
 
-    return res.status(200).json({ ok: true, bucket, objectKey });
+    return res.status(200).json({ ok:true, bucket, objectKey });
   } catch (e) {
     return res.status(500).json({ error: e?.message || String(e) });
   }
