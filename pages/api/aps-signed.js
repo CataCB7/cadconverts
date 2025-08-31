@@ -1,5 +1,5 @@
 // /pages/api/aps-signed.js
-import { getToken, ensureBucket } from "../../lib/aps";
+import { getToken, ensureBucket, APS_OSS_URL } from "../../lib/aps";
 import crypto from "crypto";
 
 export default async function handler(req, res) {
@@ -19,8 +19,8 @@ export default async function handler(req, res) {
     const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
     const objectKey = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
 
-    // 3) URL de upload în APS OSS
-    const uploadUrl = `https://developer.api.autodesk.com/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
+    // 3) URL de upload în APS OSS (pe host-ul nou)
+    const uploadUrl = `${APS_OSS_URL}/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
 
     // returnăm tot ce are nevoie clientul pentru PUT
     res.status(200).json({
@@ -32,9 +32,9 @@ export default async function handler(req, res) {
         headers: {
           Authorization: `Bearer ${tok.access_token}`,
           "x-ads-region": "EMEA",
-          "Content-Type": "application/octet-stream"
-        }
-      }
+          "Content-Type": "application/octet-stream",
+        },
+      },
     });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
