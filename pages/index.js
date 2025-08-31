@@ -136,17 +136,17 @@ export default function Home() {
         a.download = `${outNameBase}.${format}`
         a.click()
       } else {
-        const form = new FormData()
-        form.append('file', file)
-        form.append('format', format)
-        form.append('email', email)
-        const res = await fetch('/api/convert', { method: 'POST', body: form })
+        // ===== HOTFIX: nu mai trimitem upload; doar testăm cap-coadă cu stub =====
+        const res = await fetch(`/api/convert?format=${encodeURIComponent(format)}`, {
+          method: 'POST'
+        })
         if (!res.ok) throw new Error(await res.text())
         const cd = res.headers.get('content-disposition') || ''
-        let name = `converted.${format}`
+        let name = `stub.${format}`
         const m = /filename="([^"]+)"/.exec(cd); if (m) name = m[1]
         const blob = await res.blob()
         const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click()
+        // =========================================================================
       }
 
       localStorage.setItem('cc_trial_used', String(used + 1))
