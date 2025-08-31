@@ -1,13 +1,21 @@
 // /pages/api/aps-signedurl.js
 import { getToken, ensureBucket } from "../../lib/aps";
+import { Agent } from "undici";
+
+export const config = {
+  runtime: "nodejs",
+  regions: ["iad1"], // US-East
+};
+
+const agentDev = new Agent({ connect: { family: 4, hostname: "developer.api.autodesk.com" } });
+const agentOss = new Agent({ connect: { family: 4, hostname: "oss.api.autodesk.com" } });
 
 function rid() {
   return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
 }
 
-async function requestSignedUrl(token, resourceUrn) {
-  // încercăm mai întâi pe developer (cel standard în docs)
-  const body = JSON.stringify({
+async function requestSignedUrlIPv4(token, resourceUrn) {
+  const payload = JSON.stringify({
     minutesExpiration: 15,
     singleUse: false,
     resources: [{ resource: resourceUrn, permissions: ["write"] }],
@@ -20,16 +28,31 @@ async function requestSignedUrl(token, resourceUrn) {
       "Content-Type": "application/json",
       "x-ads-region": "US",
     },
-    body,
+    body: payload,
   };
 
-  // 1) developer host
-  let r = await fetch("https://developer.api.autodesk.com/oss/v2/signedresources", common);
-  if (r.status === 404) {
-    // 2) fallback pe oss host (unele regiuni/conturi îl expun aici)
-    r = await fetch("https://oss.api.autodesk.com/oss/v2/signedresources", common);
+  // 1) încearcă pe developer host (oficial)
+  try {
+    const r1 = await fetch("https://developer.api.autodesk.com/oss/v2/signedresources", {
+      ...common,
+      dispatcher: agentDev,
+    });
+    if (r1.ok || r1.status !== 404) return r1; // mergem cu răspunsul (chiar dacă nu e ok, nu e 404)
+  } catch (e) {
+    // continuăm cu fallback
   }
-  return r;
+
+  // 2) fallback pe oss host
+  try {
+    const r2 = await fetch("https://oss.api.autodesk.com/oss/v2/signedresources", {
+      ...common,
+      dispatcher: agentOss,
+    });
+    return r2;
+  } catch (e) {
+    // aruncăm mai departe ca să afișăm eroarea în JSON
+    throw e;
+  }
 }
 
 export default async function handler(req, res) {
@@ -45,13 +68,13 @@ export default async function handler(req, res) {
     const tok = await getToken();
     const bucket = await ensureBucket(tok.access_token);
 
-    // cheie + URN
+    // cheie + URN pentru obiect
     const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
     const objectKey = `${rid()}.${ext}`;
     const resourceUrn = `urn:adsk.objects:os.object:${bucket}/${objectKey}`;
 
-    // cerem Signed URL (cu fallback de host)
-    const resp = await requestSignedUrl(tok.access_token, resourceUrn);
+    // cerem Signed URL cu IPv4 + fallback host
+    const resp = await requestSignedUrlIPv4(tok.access_token, resourceUrn);
     if (!resp.ok) {
       const t = await resp.text().catch(() => "(no body)");
       return res.status(resp.status).json({ error: `signedresources failed ${resp.status}: ${t}` });
@@ -65,7 +88,7 @@ export default async function handler(req, res) {
       bucket,
       objectKey,
       upload: {
-        url: signedUrl,                     // PUT direct, fără Authorization
+        url: signedUrl, // PUT direct, fără Authorization
         headers: { "Content-Type": "application/octet-stream" },
       },
     });
