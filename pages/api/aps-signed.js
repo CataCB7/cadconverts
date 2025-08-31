@@ -1,6 +1,10 @@
 // /pages/api/aps-signed.js
 import { getToken, ensureBucket, APS_OSS_URL } from "../../lib/aps";
-import crypto from "crypto";
+
+function randId() {
+  // unic suficient pentru chei de obiect
+  return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
+}
 
 export default async function handler(req, res) {
   try {
@@ -11,18 +15,17 @@ export default async function handler(req, res) {
     const { filename } = req.body || {};
     if (!filename) return res.status(400).json({ error: "Missing filename" });
 
-    // 1) token + bucket
+    // 1) token + bucket (cu region EMEA)
     const tok = await getToken();
     const bucket = await ensureBucket(tok.access_token);
 
     // 2) generăm un objectKey unic
     const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
-    const objectKey = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+    const objectKey = `${randId()}.${ext}`;
 
-    // 3) URL de upload în APS OSS (pe host-ul nou)
+    // 3) URL de upload pe noul host OSS v2
     const uploadUrl = `${APS_OSS_URL}/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
 
-    // returnăm tot ce are nevoie clientul pentru PUT
     res.status(200).json({
       bucket,
       objectKey,
@@ -37,6 +40,8 @@ export default async function handler(req, res) {
       },
     });
   } catch (e) {
-    res.status(500).json({ error: String(e.message || e) });
+    // expune mesajul real ca să putem vedea cauza dacă mai apare 500
+    res.status(500).json({ error: e?.message || String(e) });
   }
 }
+
