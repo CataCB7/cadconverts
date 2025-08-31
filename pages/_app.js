@@ -1,5 +1,8 @@
 import '../styles/global.css'
 import { useEffect } from 'react'
+import Nav from '../components/Nav'
+import Footer from '../components/Footer'
+
 export default function MyApp({ Component, pageProps }){
   useEffect(()=>{
     const id = process.env.NEXT_PUBLIC_GA_ID
@@ -11,5 +14,11 @@ export default function MyApp({ Component, pageProps }){
     s2.innerHTML=`window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${id}');`
     document.head.appendChild(s2)
   },[])
-  return <Component {...pageProps}/>
+  return (
+    <>
+      <Nav />
+      <Component {...pageProps}/>
+      <Footer />
+    </>
+  )
 }
