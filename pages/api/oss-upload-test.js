@@ -1,7 +1,12 @@
 // /pages/api/oss-upload-test.js
 import * as aps from "../../lib/aps";
 
-const OSS_HOST = "https://oss.api.autodesk.com"; // hostul nou OSS v2
+export const config = {
+  runtime: "nodejs",
+  regions: ["iad1"],     // <- US-East (Washington DC)
+};
+
+const OSS_HOST = "https://oss.api.autodesk.com"; // hostul OSS v2
 
 export default async function handler(req, res) {
   try {
@@ -19,16 +24,15 @@ export default async function handler(req, res) {
       "x-ads-region": "US",
       "Content-Type": "application/octet-stream",
       "Content-Length": String(data.length),
+      Connection: "keep-alive",
     };
 
     const up = await fetch(url, { method: "PUT", headers, body: data });
     const text = await up.text().catch(()=>"(no body)");
-    const respHeaders = {};
-    up.headers.forEach((v,k)=>respHeaders[k]=v);
+    const respHeaders = {}; up.headers.forEach((v,k)=>respHeaders[k]=v);
 
     return res.status(200).json({
       tryUrl: url,
-      tryHeaders: headers,
       status: up.status,
       ok: up.ok,
       responseHeaders: respHeaders,
