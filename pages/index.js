@@ -175,7 +175,7 @@ export default function Home() {
               <h3 className="font-semibold">1) Choose file</h3>
               <input type="file" ref={fileRef}
                      className="input"
-                     accept=".step,.stp,.iges,.igs,.stl,.obj,.dwg,.dxf,.pdf" />
+                     accept=".step,.stp,.iges,.igs,.stl,.obj,.dwg,.dxf,.pdf,.ipt,.iam"
               <p className="lead" style={{marginTop:8, fontSize:13}}>
                 Free on-device: <b>STEP/STP, IGES/IGS → STL/OBJ</b>. Others fallback to server.
               </p>
