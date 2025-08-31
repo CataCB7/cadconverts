@@ -9,7 +9,7 @@ export default function Hero() {
         </p>
 
         <div className="row">
-          <a href="#pricing" className="btn">Start with 2 Free Conversions</a>
+          <a href="#convert" className="btn">Start with 2 Free Conversions</a>
           <a href="#pricing" className="btn ghost">Upgrade to Pro</a>
         </div>
 
