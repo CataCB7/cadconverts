@@ -22,14 +22,19 @@ export default async function handler(req, res) {
     // 3) URL de upload în APS OSS
     const uploadUrl = `https://developer.api.autodesk.com/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
 
-    // clientul va face: PUT uploadUrl cu Authorization: Bearer <token>
+    // returnăm tot ce are nevoie clientul pentru PUT
     res.status(200).json({
       bucket,
       objectKey,
+      region: "EMEA",
       upload: {
         url: uploadUrl,
-        authorization: `Bearer ${tok.access_token}`,
-      },
+        headers: {
+          Authorization: `Bearer ${tok.access_token}`,
+          "x-ads-region": "EMEA",
+          "Content-Type": "application/octet-stream"
+        }
+      }
     });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
