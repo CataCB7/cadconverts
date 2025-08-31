@@ -1,13 +1,15 @@
 // /pages/api/aps-upload-proxy.js
 import * as aps from "../../lib/aps";
+import { Agent } from "undici";
 
 export const config = {
   api: { bodyParser: false },
   runtime: "nodejs",
-  regions: ["iad1"],     // <- US-East (Washington DC)
+  regions: ["iad1"],
 };
 
 const OSS_HOST = "https://oss.api.autodesk.com";
+const ipv4Agent = new Agent({ connect: { family: 4, hostname: "oss.api.autodesk.com" } });
 
 function rid(){ return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36); }
 
@@ -39,6 +41,7 @@ export default async function handler(req, res) {
         Connection: "keep-alive",
       },
       body: buffer,
+      dispatcher: ipv4Agent,
     });
 
     const body = await up.text().catch(()=>"(no body)");
