@@ -1,66 +1,30 @@
-import { IncomingForm } from 'formidable'
-import fs from 'fs'
+// HOTFIX: răspunde instant cu un fișier stub, fără să mai parseze upload-ul.
+// Scop: să verificăm cap-coadă fluxul din UI. După test, legăm APS (Forge).
 
-export const config = { api: { bodyParser: false } }
+export const config = { api: { bodyParser: false } };
 
-export default async function handler(req, res){
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST')
-    return res.status(405).send('Method not allowed')
+    res.setHeader('Allow', 'POST');
+    return res.status(405).send('Method not allowed');
   }
 
-  const form = new IncomingForm({
-    keepExtensions: true,
-    maxFileSize: 200 * 1024 * 1024, // 200MB
-  })
+  // Nu parsam corpul; doar livrăm un fișier mic dummy.
+  // (Dacă vrei altă extensie la test, schimbă "pdf" mai jos.)
+  const desired = 'pdf';
 
-  form.parse(req, async (err, fields, files) => {
-    if (err) return res.status(400).send('Invalid form data')
-    const f = files.file
-    if (!f) return res.status(400).send('No file uploaded')
+  const text = [
+    'CadConverts cloud stub ✓',
+    `requested_output=${desired}`,
+    '(HOTFIX: upload ignored; real APS coming next)',
+    ''
+  ].join('\n');
 
-    // extragem câmpurile trimise din frontend
-    const desired = String(fields.format || 'bin').toLowerCase()
-    const email   = String(fields.email  || '')
-    const job     = String(fields.job    || 'not-set')
+  const buf = Buffer.from(text, 'utf8');
+  const filename = `stub.${desired}`;
 
-    // nume de fișier de ieșire
-    const origName = f.originalFilename || 'file'
-    const base = (origName.replace(/\.[^.]+$/,'') || 'converted')
-    const outName = `${base}.${desired}`
-
-    // conținut STUB (placeholder) — îl vom înlocui când legăm APS
-    const text = [
-      'CadConverts cloud stub ✓',
-      `requested_output=${desired}`,
-      `job=${job}`,
-      `email=${email}`,
-      '(This is a placeholder file until Autodesk Platform Services is enabled.)',
-      ''
-    ].join('\n')
-
-    const buf = Buffer.from(text, 'utf8')
-
-    // content-type simplu în funcție de extensie
-    const mime =
-      desired === 'pdf' ? 'application/pdf' :
-      desired === 'dxf' ? 'application/dxf' :
-      desired === 'stl' ? 'model/stl' :
-      desired === 'obj' ? 'text/plain' :
-      desired === 'step' || desired === 'stp' ? 'application/step' :
-      desired === 'iges' || desired === 'igs' ? 'application/iges' :
-      'application/octet-stream'
-
-    // headere de ajutor (vizibile în Network tab / pentru debug)
-    res.setHeader('X-Info', 'Stub response — real APS conversions coming next')
-    if (job !== 'not-set') res.setHeader('X-Job', job)
-
-    // download
-    res.setHeader('Content-Type', mime)
-    res.setHeader('Content-Disposition', `attachment; filename="${outName}"`)
-    res.status(200).send(buf)
-
-    // curățăm fișierul temporar urcat
-    try { await fs.promises.unlink(f.filepath) } catch {}
-  })
+  res.setHeader('X-Info', 'Stub response — hotfix without parsing');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  return res.status(200).send(buf);
 }
