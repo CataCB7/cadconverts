@@ -1,9 +1,14 @@
 // /pages/api/aps-upload-proxy.js
-import { getToken, ensureBucket, APS_BASE_URL } from "../../lib/aps";
+import * as aps from "../../lib/aps";
 
-export const config = { api: { bodyParser: false } };
+export const config = {
+  api: { bodyParser: false },
+  runtime: "nodejs",
+};
 
-function rid() { return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36); }
+function rid() {
+  return Math.random().toString(36).slice(2) + "-" + Date.now().toString(36);
+}
 
 export default async function handler(req, res) {
   try {
@@ -12,30 +17,31 @@ export default async function handler(req, res) {
     const filename = (req.query.filename || "").toString().trim();
     if (!filename) return res.status(400).json({ error: "Missing ?filename=" });
 
-    // body binar
+    // 1) body binar
     const chunks = [];
     for await (const ch of req) chunks.push(ch);
     const buffer = Buffer.concat(chunks);
     if (!buffer?.length) return res.status(400).json({ error: "Empty body" });
 
-    // token + bucket (US)
-    const tok = await getToken();
-    const bucket = await ensureBucket(tok.access_token);
+    // 2) token + bucket (US)
+    const tok = await aps.getToken();
+    const bucket = await aps.ensureBucket(tok.access_token);
 
+    // 3) cheie obiect
     const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
     const objectKey = `${rid()}.${ext}`;
 
-    // Upload v2: **POST** pe developer host + x-ads-region: US
-    const url = `${APS_BASE_URL}/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
+    // 4) Upload v2: **POST** pe developer host + x-ads-region: US
+    const url = `${aps.APS_BASE_URL}/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(objectKey)}`;
     const up = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${tok.access_token}`,
         "x-ads-region": "US",
         "Content-Type": "application/octet-stream",
-        "Content-Length": String(buffer.length)
+        "Content-Length": String(buffer.length),
       },
-      body: buffer
+      body: buffer,
     });
 
     if (!up.ok) {
