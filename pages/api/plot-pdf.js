@@ -1,10 +1,8 @@
 // pages/api/plot-pdf.js
-// Lansează un WorkItem (Design Automation) pentru DWG/DXF -> PDF
-// Body: { bucket, objectKey, outKey? }
-// Răspunde: { ok, workitemId, resultKey }
+// WorkItem (Design Automation) DWG/DXF -> PDF fără signedS3 (doar OSS + headers)
 
 const REGION = "us-east";
-const REGION_HEADER = { "x-ads-region": "US" }; // important la DA/OSS
+const REGION_HEADER = { "x-ads-region": "US" };
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
@@ -29,10 +27,9 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
 function ownerFromEnv() {
   const id = process.env.APS_CLIENT_ID;
   if (!id) throw new Error("Missing APS_CLIENT_ID");
-  return id; // folosim clientId ca owner (<clientId>.PlotToPDF)
+  return id; // <clientId>.PlotToPDF
 }
 
-// verifică că obiectul există (și ia details)
 async function ensureObjectExists(access_token, bucket, objectKey) {
   const r = await fetch(
     `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
@@ -41,29 +38,6 @@ async function ensureObjectExists(access_token, bucket, objectKey) {
   const t = await r.text();
   if (!r.ok) throw new Error(`object not found: ${t}`);
   return t ? JSON.parse(t) : {};
-}
-
-// facem doar signed UPLOAD pentru rezultat (asta e stabilă)
-async function makeSignedUpload(access_token, bucket, objectKey, minutes = 60) {
-  const r = await fetch(
-    `https://developer.api.autodesk.com/oss/v2/signeds3/upload`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
-        ...REGION_HEADER
-      },
-      body: JSON.stringify({
-        bucketKey: bucket,
-        objectKey,
-        minutesExpiration: minutes
-      })
-    }
-  );
-  const t = await r.text();
-  if (!r.ok) throw new Error(`signed upload failed: ${t}`);
-  return JSON.parse(t); // { url, expiration }
 }
 
 export default async function handler(req, res) {
@@ -77,18 +51,18 @@ export default async function handler(req, res) {
     if (!bucket || !objectKey) {
       return res.status(400).json({ error: "Missing bucket or objectKey" });
     }
-    const resultKey = outKey || (objectKey.replace(/\.[^.]+$/, "") + ".pdf");
+
+    // rezultatul îl punem sub nume unic .pdf ca să evităm coliziuni
+    const baseName = objectKey.replace(/\.[^.]+$/, "");
+    const resultKey = outKey || `${baseName}-${Date.now()}.pdf`;
 
     // 1) token
     const { access_token } = await getApsToken();
 
-    // 2) validăm că obiectul există (dă 404 dacă e scris greșit)
+    // 2) validăm inputul
     await ensureObjectExists(access_token, bucket, objectKey);
 
-    // 3) pregătim uploadul rezultatului (PUT semnat)
-    const output = await makeSignedUpload(access_token, bucket, resultKey, 60);
-
-    // 4) definim activity și argumentele
+    // 3) activitate DA
     const owner = ownerFromEnv();
     const activityId = `${owner}.PlotToPDF`;
 
@@ -96,11 +70,11 @@ export default async function handler(req, res) {
     const lispUrl = `${base}/da/plot.lsp`;
     const scriptUrl = `${base}/da/script.scr`;
 
-    // URL direct din OSS pentru input (fără signedS3), cu header Authorization
-    const directOssUrl =
-      `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}`;
+    // URL-uri OSS directe
+    const inputUrl  = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}`;
+    const outputUrl = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(resultKey)}`;
 
-    // 5) creăm WorkItem: input GET cu header, output PUT pe URL semnat
+    // 4) WorkItem: input = GET cu Authorization; output = PUT pe OSS cu Authorization
     const wi = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/workitems`, {
       method: "POST",
       headers: {
@@ -112,17 +86,25 @@ export default async function handler(req, res) {
         activityId,
         arguments: {
           inputFile: {
-            url: directOssUrl,
+            url: inputUrl,
             headers: {
               Authorization: `Bearer ${access_token}`,
               "x-ads-region": "US"
             }
           },
-          resultPdf: { url: output.url, verb: "put" },
-          lisp: { url: lispUrl },
-          script: { url: scriptUrl },
-        },
-      }),
+          resultPdf: {
+            url: outputUrl,
+            verb: "put",
+            headers: {
+              Authorization: `Bearer ${access_token}`,
+              "Content-Type": "application/octet-stream",
+              "x-ads-region": "US"
+            }
+          },
+          lisp:   { url: lispUrl },
+          script: { url: scriptUrl }
+        }
+      })
     });
 
     const wiText = await wi.text();
@@ -133,7 +115,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       workitemId: wiData.id || wiData.workitemId || null,
-      resultKey,
+      resultKey
     });
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
