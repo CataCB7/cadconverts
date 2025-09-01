@@ -64,7 +64,7 @@ export default async function handler(req, res) {
 
     // 3) activitate DA (cu aliasul OBLIGATORIU)
     const owner = ownerFromEnv();
-    const activityId = `${owner}.PlotToPDF+$LATEST`;
+    const activityId = `${owner}.PlotToPDF+prod`;
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || "https://www.cadconverts.com";
     const lispUrl = `${base}/da/plot.lsp`;
