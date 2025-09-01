@@ -1,14 +1,17 @@
 // pages/api/da-ensure.js
-// 1) Asigură nickname-ul DA (Automation API) pentru contul tău
-// 2) Creează (dacă nu există) activitatea <owner>.PlotToPDF pe AutoCAD Core Console 2024
+// Creează (dacă nu există) activitatea <clientId>.PlotToPDF pe AutoCAD Core Console 2024
+// Nu folosim nickname (owner = APS_CLIENT_ID)
 
-const REGION = "us-east"; // DA region
+const REGION = "us-east";
 const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // AutoCAD 2024
 
-// Owner (nickname) dorit: dacă ai APS_DA_NICKNAME, îl folosim; altfel folosim CLIENT_ID (valid mereu)
-const OWNER = process.env.APS_DA_NICKNAME || process.env.APS_CLIENT_ID;
+function getOwner() {
+  // owner = clientId (sigur, fără nickname)
+  const id = process.env.APS_CLIENT_ID;
+  if (!id) throw new Error("Missing APS_CLIENT_ID");
+  return id;
+}
 const ACTIVITY_SHORT = "PlotToPDF";
-const ACTIVITY_ID = `${OWNER}.${ACTIVITY_SHORT}`;
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
@@ -30,49 +33,25 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
   return r.json(); // { access_token }
 }
 
-async function ensureNickname(access_token) {
-  // vezi ce nickname-uri ai
-  const me = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/nicknames/me`, {
-    headers: { Authorization: `Bearer ${access_token}` },
-  });
-  if (!me.ok) throw new Error(`nicknames/me failed: ${await me.text()}`);
-  const data = await me.json(); // { current: "...", alternates: [...] }
-  if (data.current === OWNER || (data.alternates || []).includes(OWNER)) return { ok: true, owner: OWNER, existed: true };
-
-  // setează nickname-ul dorit (dacă e liber) — o singură dată per cont/region
-  const set = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/nicknames`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ nickname: OWNER }),
-  });
-  if (!set.ok) {
-    const t = await set.text();
-    throw new Error(`nickname create failed: ${t}`);
-  }
-  return { ok: true, owner: OWNER, created: true };
-}
-
 export default async function handler(req, res) {
   try {
+    const owner = getOwner();
+    const ACTIVITY_ID = `${owner}.${ACTIVITY_SHORT}`;
     const { access_token } = await getApsToken();
 
-    // 1) asigură nickname-ul (owner)
-    const nick = await ensureNickname(access_token);
-
-    // 2) vezi dacă activitatea există
+    // 1) vezi dacă activitatea există
     const getAct = await fetch(
       `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(ACTIVITY_ID)}`,
       { headers: { Authorization: `Bearer ${access_token}` } }
     );
-
     if (getAct.ok) {
       const existing = await getAct.json();
-      return res.status(200).json({ ok: true, exists: true, owner: OWNER, activity: existing });
+      return res.status(200).json({ ok: true, exists: true, owner, activity: existing });
     }
 
-    // 3) creează activitatea (fără 'version')
+    // 2) creează activitatea (fără 'version')
     const activityDef = {
-      id: ACTIVITY_ID,      // <owner>.PlotToPDF
+      id: ACTIVITY_ID, // <clientId>.PlotToPDF
       engine: ENGINE_ID,
       commandLine: [
         `$(engine.path)\\accoreconsole.exe /i "$(args[inputFile].path)" /s "$(args[script].path)" /lsp "$(args[lisp].path)"`
@@ -100,7 +79,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      owner: OWNER,
+      owner,
       created: true,
       details: text ? JSON.parse(text) : {}
     });
