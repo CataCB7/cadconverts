@@ -11,11 +11,12 @@ export default function TestConvert() {
   const [progress, setProgress] = useState("");
   const pollRef = useRef(null);
 
-  // 1) listăm obiectele din bucket (ca în test-list)
+  // 1) listăm obiectele din bucket
   useEffect(() => {
     (async () => {
       try {
-        const tok = await fetch("/api/aps-token").then(r => r.json());
+        setMsg("");
+        const tok = await fetch("/api/aps-token").then((r) => r.json());
         const r = await fetch(
           `https://developer.api.autodesk.com/oss/v2/buckets/${BUCKET}/objects`,
           { headers: { Authorization: `Bearer ${tok.access_token}` } }
@@ -41,6 +42,7 @@ export default function TestConvert() {
       const r = await fetch("/api/convert", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // SVF2 (2D)
         body: JSON.stringify({ bucket: BUCKET, objectKey, format: "svf2" }),
       });
       const data = await r.json();
@@ -52,21 +54,23 @@ export default function TestConvert() {
       // 2) poll status la fiecare 5s
       pollRef.current = setInterval(async () => {
         try {
-          const s = await fetch(`/api/convert-status?urn=${encodeURIComponent(data.urn)}`).then(r => r.json());
+          const s = await fetch(
+            `/api/convert-status?urn=${encodeURIComponent(data.urn)}`
+          ).then((r) => r.json());
           if (!s.ok) throw new Error(s.error || "status error");
           const manifest = s.manifest || {};
           const st = manifest.status || "";
           setStatus(st);
-          // progress este în children[].progress (string gen "complete" sau procent)
+          // progress e de regulă în derivatives[0].children[0].progress
           let prog = "";
-          const ch = (manifest.derivatives?.[0]?.children) || [];
+          const ch = manifest?.derivatives?.[0]?.children || [];
           if (ch.length && ch[0].progress) prog = ch[0].progress;
           setProgress(prog);
 
           if (st === "success") {
             clearInterval(pollRef.current);
             pollRef.current = null;
-            setMsg("✅ Gata! PDF generat.");
+            setMsg("✅ Gata! SVF2 generat. 👉 Deschide în viewer mai jos.");
           } else if (st === "failed") {
             clearInterval(pollRef.current);
             pollRef.current = null;
@@ -85,7 +89,7 @@ export default function TestConvert() {
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", padding: 20 }}>
-      <h1>🛠️ Conversie DWG/DXF → PDF (test)</h1>
+      <h1>🛠️ Conversie DWG/DXF → SVF2 (test)</h1>
 
       <section style={{ marginTop: 20 }}>
         <h3>Fișiere în bucket</h3>
@@ -97,7 +101,7 @@ export default function TestConvert() {
                 onClick={() => startConvert(f.objectKey)}
                 style={{ marginLeft: 12 }}
               >
-                Convert to PDF
+                Convert to SVF2
               </button>
             </li>
           ))}
@@ -105,9 +109,32 @@ export default function TestConvert() {
       </section>
 
       <section style={{ marginTop: 24 }}>
-        {urn && <div><b>URN:</b> <code>{urn}</code></div>}
-        {status && <div><b>Status:</b> {status}</div>}
-        {progress && <div><b>Progress:</b> {progress}</div>}
+        {urn && (
+          <div style={{ marginBottom: 8 }}>
+            <b>URN:</b> <code>{urn}</code>
+          </div>
+        )}
+        {status && (
+          <div style={{ marginBottom: 8 }}>
+            <b>Status:</b> {status}
+          </div>
+        )}
+        {progress && (
+          <div style={{ marginBottom: 8 }}>
+            <b>Progress:</b> {progress}
+          </div>
+        )}
+        {urn && (
+          <p style={{ marginTop: 8 }}>
+            <a
+              href={`/test-viewer?urn=${encodeURIComponent(urn)}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              🔎 Deschide în viewer
+            </a>
+          </p>
+        )}
         {msg && <p style={{ marginTop: 12 }}>{msg}</p>}
       </section>
     </main>
