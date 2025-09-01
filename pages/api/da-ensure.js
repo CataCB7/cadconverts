@@ -1,23 +1,19 @@
 // pages/api/da-ensure.js
-// Creează (dacă nu există) activitatea <clientId>.PlotToPDF pe AutoCAD Core Console 2024
-// Nu folosim nickname (owner = APS_CLIENT_ID)
+// Creează/confirmă activitatea <clientId>.PlotToPDF și setează aliasul "prod" la ultima versiune
 
+const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // AutoCAD 2024 Core Console
 const REGION = "us-east";
-const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // AutoCAD 2024
+const REGION_HEADER = { "x-ads-region": "US" };
 
-function getOwner() {
-  // owner = clientId (sigur, fără nickname)
+function owner() {
   const id = process.env.APS_CLIENT_ID;
   if (!id) throw new Error("Missing APS_CLIENT_ID");
   return id;
 }
-const ACTIVITY_SHORT = "PlotToPDF";
 
-async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
+async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create code:all") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
-  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
-    throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
-  }
+  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
   const body = new URLSearchParams({
     client_id: APS_CLIENT_ID,
     client_secret: APS_CLIENT_SECRET,
@@ -30,61 +26,83 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
     body,
   });
   if (!r.ok) throw new Error(await r.text());
-  return r.json(); // { access_token }
+  return r.json();
 }
 
 export default async function handler(req, res) {
   try {
-    const owner = getOwner();
-    const ACTIVITY_ID = `${owner}.${ACTIVITY_SHORT}`;
     const { access_token } = await getApsToken();
+    const actId = `${owner()}.PlotToPDF`;
 
-    // 1) vezi dacă activitatea există
+    // 1) vezi dacă există activitatea
+    let existing = null;
     const getAct = await fetch(
-      `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(ACTIVITY_ID)}`,
-      { headers: { Authorization: `Bearer ${access_token}` } }
+      `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(actId)}`,
+      { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
     );
     if (getAct.ok) {
-      const existing = await getAct.json();
-      return res.status(200).json({ ok: true, exists: true, owner, activity: existing });
+      existing = await getAct.json();
+    } else {
+      // 2) creează activitatea (fără appBundle; script+lisp vin din URL public)
+      const createBody = {
+        id: actId,
+        engine: ENGINE_ID,
+        commandLine: [
+          `$(engine.path)\\accoreconsole.exe /i "$(args[inputFile].path)" /s "$(args[script].path)" /lsp "$(args[lisp].path)"`
+        ],
+        parameters: {
+          inputFile: { verb: "get", localName: "input.dwg", description: "DWG/DXF input" },
+          resultPdf: { verb: "put", localName: "result.pdf", description: "PDF output" },
+          lisp:      { verb: "get", localName: "plot.lsp" },
+          script:    { verb: "get", localName: "script.scr" }
+        },
+        description: "Plot DWG/DXF to PDF using DWG To PDF.pc3"
+      };
+      const createAct = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/activities`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json", ...REGION_HEADER },
+        body: JSON.stringify(createBody),
+      });
+      const t = await createAct.text();
+      if (!createAct.ok) {
+        return res.status(createAct.status).json({ ok:false, error:"create activity failed", details:t });
+      }
+      existing = t ? JSON.parse(t) : {};
     }
 
-    // 2) creează activitatea (fără 'version')
-    const activityDef = {
-      id: ACTIVITY_ID, // <clientId>.PlotToPDF
-      engine: ENGINE_ID,
-      commandLine: [
-        `$(engine.path)\\accoreconsole.exe /i "$(args[inputFile].path)" /s "$(args[script].path)" /lsp "$(args[lisp].path)"`
-      ],
-      parameters: {
-        inputFile: { verb: "get", description: "DWG or DXF to plot", localName: "input.dwg" },
-        resultPdf: { verb: "put", description: "Generated PDF", localName: "result.pdf" },
-        lisp: { verb: "get", description: "LISP helper", localName: "plot.lsp" },
-        script: { verb: "get", description: "Core Console script", localName: "script.scr" }
-      },
-      settings: {},
-      description: "Plot DWG/DXF to PDF using DWG To PDF.pc3"
-    };
+    // 3) află ultima versiune a activității
+    const getVersions = await fetch(
+      `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(actId)}/versions`,
+      { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
+    );
+    const versions = getVersions.ok ? (await getVersions.json()) : { data: [] };
+    const latest = (versions.data || []).sort((a,b)=>(b.version - a.version))[0];
+    if (!latest?.version) {
+      return res.status(500).json({ ok:false, error:"No activity versions found" });
+    }
 
-    const createAct = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/activities`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
-      body: JSON.stringify(activityDef),
-    });
-
-    const text = await createAct.text();
-    if (!createAct.ok) {
-      return res.status(createAct.status).json({ ok: false, error: "create activity failed", details: text });
+    // 4) upsert alias "prod" -> latest.version
+    const aliasId = `${actId}+prod`;
+    const upsert = await fetch(
+      `https://developer.api.autodesk.com/da/${REGION}/v3/aliases/${encodeURIComponent(aliasId)}`,
+      {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${access_token}`, "Content-Type":"application/json", ...REGION_HEADER },
+        body: JSON.stringify({ version: latest.version }),
+      }
+    );
+    const aliasText = await upsert.text();
+    if (!upsert.ok) {
+      return res.status(upsert.status).json({ ok:false, error:"alias upsert failed", details:aliasText });
     }
 
     return res.status(200).json({
-      ok: true,
-      owner,
-      created: true,
-      details: text ? JSON.parse(text) : {}
+      ok:true,
+      activity: existing,
+      latestVersion: latest.version,
+      alias: "prod"
     });
   } catch (e) {
-    console.error("da-ensure error:", e);
-    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.status(500).json({ ok:false, error: String(e?.message || e) });
   }
 }
