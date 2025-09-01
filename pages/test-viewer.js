@@ -1,32 +1,39 @@
 // pages/test-viewer.js
 import Head from "next/head";
 import { useEffect, useRef } from "react";
-
-// ⇩ pune aici URN-ul tău (cel din /test-convert)
-const URN = "dXJuOmFkc2sub2JqZWN0czpvcy5vYmplY3Q6Y2FkY29udmVydHMtcHJvZC11cy0xMjNhYmMvcmlnbGVfMzExci5kd2c";
+import { useRouter } from "next/router";
 
 export default function TestViewer() {
+  const router = useRouter();
   const viewerDiv = useRef(null);
   const viewerRef = useRef(null);
 
   useEffect(() => {
+    let isMounted = true;
     let viewer;
 
     async function start() {
-      // 1) token APS
+      // 1) URN din query sau fallback (dacă nu e dat)
+      const urnFromQuery =
+        (router.query && router.query.urn && String(router.query.urn)) || "";
+      const URN =
+        urnFromQuery ||
+        "dXJuOmFkc2sub2JqZWN0czpvcy5vYmplY3Q6Y2FkY29udmVydHMtcHJvZC11cy0xMjNhYmMvcmlnbGVfMzExci5kd2c";
+
+      // 2) token APS
       const tok = await fetch("/api/aps-token").then((r) => r.json());
 
-      // 2) inițializează Viewer
+      // 3) inițializează Viewer
       const options = {
         env: "AutodeskProduction",
         api: "derivativeV2",
         getAccessToken: (onTokenReady) => {
-          // token + expirare (1h tipic)
           onTokenReady(tok.access_token, 3500);
         },
       };
 
       window.Autodesk.Viewing.Initializer(options, () => {
+        if (!isMounted) return;
         viewer = new window.Autodesk.Viewing.GuiViewer3D(viewerDiv.current);
         viewer.start();
         viewerRef.current = viewer;
@@ -49,13 +56,15 @@ export default function TestViewer() {
     }
 
     start();
+
     return () => {
+      isMounted = false;
       if (viewerRef.current) {
         viewerRef.current.finish();
         viewerRef.current = null;
       }
     };
-  }, []);
+  }, [router.query?.urn]);
 
   return (
     <>
