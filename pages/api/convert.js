@@ -1,29 +1,104 @@
-// HOTFIX: acceptă GET + POST și returnează imediat un fișier stub.
-// Scop: să verificăm că ruta funcționează cap-coadă în producție.
+// pages/api/convert.js
+// Lansează conversia Model Derivative: DWG/DXF -> PDF (2D)
 
-export const config = { api: { bodyParser: false } };
+async function getApsToken() {
+  const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_SCOPES } = process.env;
+  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
+    throw new Error("APS credentials missing");
+  }
+  const scopes = APS_SCOPES || "data:read data:write bucket:read";
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    scope: scopes,
+    client_id: APS_CLIENT_ID,
+    client_secret: APS_CLIENT_SECRET,
+  });
+  const r = await fetch(
+    "https://developer.api.autodesk.com/authentication/v2/token",
+    { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }
+  );
+  if (!r.ok) throw new Error(`APS token failed: ${await r.text()}`);
+  return r.json(); // { access_token }
+}
+
+function toBase64Url(str) {
+  return Buffer.from(str)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET' && req.method !== 'POST') {
-    res.setHeader('Allow', 'GET, POST');
-    return res.status(405).send('Method not allowed');
+  try {
+    if (req.method === "GET") {
+      // ping/ajutor simplu
+      return res.status(200).json({
+        ok: true,
+        hint: "POST this endpoint with { bucket, objectKey } to start DWG/DXF -> PDF conversion.",
+      });
+    }
+
+    if (req.method !== "POST") {
+      res.setHeader("Allow", ["GET", "POST"]);
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    const { bucket, objectKey, format = "pdf" } = req.body || {};
+    if (!bucket || !objectKey) {
+      return res.status(400).json({ error: "Missing bucket or objectKey" });
+    }
+    if (format !== "pdf") {
+      return res.status(400).json({ error: "Unsupported format (only pdf for now)" });
+    }
+
+    const { access_token } = await getApsToken();
+
+    // 1) Detalii obiect (obținem objectId)
+    const encodedKey = encodeURIComponent(objectKey);
+    const det = await fetch(
+      `https://developer.api.autodesk.com/oss/v2/buckets/${bucket}/objects/${encodedKey}/details`,
+      { headers: { Authorization: `Bearer ${access_token}` } }
+    );
+    const detText = await det.text();
+    if (!det.ok) {
+      return res
+        .status(det.status)
+        .json({ error: "Failed to get object details", details: detText });
+    }
+    const details = detText ? JSON.parse(detText) : {};
+    const urn = toBase64Url(details.objectId);
+
+    // 2) Lansăm jobul de conversie
+    const jobResp = await fetch(
+      "https://developer.api.autodesk.com/modelderivative/v2/designdata/job",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${access_token}`,
+          "Content-Type": "application/json",
+          "x-ads-region": "US",
+        },
+        body: JSON.stringify({
+          input: { urn },
+          output: { formats: [{ type: "pdf", views: ["2d"] }] },
+        }),
+      }
+    );
+
+    const jobText = await jobResp.text();
+    if (!jobResp.ok) {
+      return res.status(jobResp.status).json({ error: "Job submit failed", details: jobText });
+    }
+
+    // Returnăm URN + payload job (pt. status ulterior)
+    return res.status(200).json({
+      ok: true,
+      urn,
+      job: jobText ? JSON.parse(jobText) : null,
+    });
+  } catch (err) {
+    console.error("convert api error:", err);
+    return res.status(500).json({ error: String(err?.message || err) });
   }
-
-  // luăm formatul din query (ex: /api/convert?format=pdf)
-  const desired = String((req.query.format || 'pdf')).toLowerCase();
-
-  const text = [
-    'CadConverts cloud stub ✓',
-    `requested_output=${desired}`,
-    '(HOTFIX: no upload parsing; APS coming next)',
-    ''
-  ].join('\n');
-
-  const buf = Buffer.from(text, 'utf8');
-  const filename = `stub.${desired}`;
-
-  res.setHeader('X-Info', 'Stub response (GET/POST)');
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  return res.status(200).send(buf);
 }
