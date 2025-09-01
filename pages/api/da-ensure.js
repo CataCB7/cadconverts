@@ -1,10 +1,14 @@
 // pages/api/da-ensure.js
-// Creează (dacă nu există) o activitate Design Automation (Automation API) pentru AutoCAD care face Plot -> PDF
-// Engine: AutoCAD Core Console 2024
+// 1) Asigură nickname-ul DA (Automation API) pentru contul tău
+// 2) Creează (dacă nu există) activitatea <owner>.PlotToPDF pe AutoCAD Core Console 2024
 
+const REGION = "us-east"; // DA region
 const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // AutoCAD 2024
-const NICK = process.env.APS_DA_NICKNAME || "cadconverts";
-const ACTIVITY_ID = `${NICK}.PlotToPDF`;
+
+// Owner (nickname) dorit: dacă ai APS_DA_NICKNAME, îl folosim; altfel folosim CLIENT_ID (valid mereu)
+const OWNER = process.env.APS_DA_NICKNAME || process.env.APS_CLIENT_ID;
+const ACTIVITY_SHORT = "PlotToPDF";
+const ACTIVITY_ID = `${OWNER}.${ACTIVITY_SHORT}`;
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
@@ -26,26 +30,51 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
   return r.json(); // { access_token }
 }
 
+async function ensureNickname(access_token) {
+  // vezi ce nickname-uri ai
+  const me = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/nicknames/me`, {
+    headers: { Authorization: `Bearer ${access_token}` },
+  });
+  if (!me.ok) throw new Error(`nicknames/me failed: ${await me.text()}`);
+  const data = await me.json(); // { current: "...", alternates: [...] }
+  if (data.current === OWNER || (data.alternates || []).includes(OWNER)) return { ok: true, owner: OWNER, existed: true };
+
+  // setează nickname-ul dorit (dacă e liber) — o singură dată per cont/region
+  const set = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/nicknames`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ nickname: OWNER }),
+  });
+  if (!set.ok) {
+    const t = await set.text();
+    throw new Error(`nickname create failed: ${t}`);
+  }
+  return { ok: true, owner: OWNER, created: true };
+}
+
 export default async function handler(req, res) {
   try {
     const { access_token } = await getApsToken();
 
-    // 1) vezi dacă activitatea există
+    // 1) asigură nickname-ul (owner)
+    const nick = await ensureNickname(access_token);
+
+    // 2) vezi dacă activitatea există
     const getAct = await fetch(
-      `https://developer.api.autodesk.com/da/us-east/v3/activities/${encodeURIComponent(ACTIVITY_ID)}`,
+      `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(ACTIVITY_ID)}`,
       { headers: { Authorization: `Bearer ${access_token}` } }
     );
+
     if (getAct.ok) {
       const existing = await getAct.json();
-      return res.status(200).json({ ok: true, exists: true, activity: existing });
+      return res.status(200).json({ ok: true, exists: true, owner: OWNER, activity: existing });
     }
 
-    // 2) creează activitatea (fără "version"!)
+    // 3) creează activitatea (fără 'version')
     const activityDef = {
-      id: ACTIVITY_ID,
+      id: ACTIVITY_ID,      // <owner>.PlotToPDF
       engine: ENGINE_ID,
       commandLine: [
-        // rulăm AutoCAD Core Console cu script și LISP
         `$(engine.path)\\accoreconsole.exe /i "$(args[inputFile].path)" /s "$(args[script].path)" /lsp "$(args[lisp].path)"`
       ],
       parameters: {
@@ -58,23 +87,23 @@ export default async function handler(req, res) {
       description: "Plot DWG/DXF to PDF using DWG To PDF.pc3"
     };
 
-    const createAct = await fetch("https://developer.api.autodesk.com/da/us-east/v3/activities", {
+    const createAct = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/activities`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify(activityDef),
     });
 
     const text = await createAct.text();
     if (!createAct.ok) {
-      return res
-        .status(createAct.status)
-        .json({ ok: false, error: "create activity failed", details: text });
+      return res.status(createAct.status).json({ ok: false, error: "create activity failed", details: text });
     }
 
-    return res.status(200).json({ ok: true, created: true, details: text ? JSON.parse(text) : {} });
+    return res.status(200).json({
+      ok: true,
+      owner: OWNER,
+      created: true,
+      details: text ? JSON.parse(text) : {}
+    });
   } catch (e) {
     console.error("da-ensure error:", e);
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
