@@ -1,5 +1,5 @@
 // pages/api/convert.js
-// Lansează conversia Model Derivative: DWG/DXF -> PDF (2D)
+// Lansează conversia Model Derivative: DWG/DXF -> SVF2 (2D) pentru viewer
 
 async function getApsToken() {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_SCOPES } = process.env;
@@ -32,10 +32,9 @@ function toBase64Url(str) {
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
-      // ping/ajutor simplu
       return res.status(200).json({
         ok: true,
-        hint: "POST this endpoint with { bucket, objectKey } to start DWG/DXF -> PDF conversion.",
+        hint: "POST { bucket, objectKey } to start DWG/DXF -> SVF2 (2D) conversion.",
       });
     }
 
@@ -44,12 +43,13 @@ export default async function handler(req, res) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const { bucket, objectKey, format = "pdf" } = req.body || {};
+    // Acceptăm format param dar implicit folosim svf2 2d (stabil pentru DWG/DXF)
+    const { bucket, objectKey, format = "svf2" } = req.body || {};
     if (!bucket || !objectKey) {
       return res.status(400).json({ error: "Missing bucket or objectKey" });
     }
-    if (format !== "pdf") {
-      return res.status(400).json({ error: "Unsupported format (only pdf for now)" });
+    if (format !== "svf2") {
+      return res.status(400).json({ error: "Unsupported format (use svf2)" });
     }
 
     const { access_token } = await getApsToken();
@@ -69,7 +69,7 @@ export default async function handler(req, res) {
     const details = detText ? JSON.parse(detText) : {};
     const urn = toBase64Url(details.objectId);
 
-    // 2) Lansăm jobul de conversie
+    // 2) Lansăm jobul de conversie -> SVF2 (2D)
     const jobResp = await fetch(
       "https://developer.api.autodesk.com/modelderivative/v2/designdata/job",
       {
@@ -81,14 +81,17 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           input: { urn },
-          output: { formats: [{ type: "pdf", views: ["2d"] }] },
+          output: { formats: [{ type: "svf2", views: ["2d"] }] },
         }),
       }
     );
 
     const jobText = await jobResp.text();
     if (!jobResp.ok) {
-      return res.status(jobResp.status).json({ error: "Job submit failed", details: jobText });
+      return res.status(jobResp.status).json({
+        error: "Job submit failed",
+        details: jobText,
+      });
     }
 
     // Returnăm URN + payload job (pt. status ulterior)
