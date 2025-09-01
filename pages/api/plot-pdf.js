@@ -62,9 +62,9 @@ export default async function handler(req, res) {
     // 2) validăm inputul
     await ensureObjectExists(access_token, bucket, objectKey);
 
-    // 3) activitate DA
+    // 3) activitate DA (cu aliasul OBLIGATORIU)
     const owner = ownerFromEnv();
-    const activityId = `${owner}.PlotToPDF`;
+    const activityId = `${owner}.PlotToPDF+$LATEST`;
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || "https://www.cadconverts.com";
     const lispUrl = `${base}/da/plot.lsp`;
