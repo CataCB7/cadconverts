@@ -41,7 +41,7 @@ export default function TestConvert() {
       const r = await fetch("/api/convert", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bucket: BUCKET, objectKey, format: "pdf" }),
+        body: JSON.stringify({ bucket: BUCKET, objectKey, format: "svf2" }),
       });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || "Job submit failed");
