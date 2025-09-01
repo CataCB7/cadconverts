@@ -4,6 +4,7 @@
 // Output: { ok, workitemId, resultKey }
 
 const REGION = "us-east";
+const REGION_HEADER = { "x-ads-region": "US" }; // important pentru unele conturi/zones
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
@@ -31,20 +32,56 @@ function ownerFromEnv() {
   return id; // folosim clientId ca owner
 }
 
+// verificăm că obiectul există înainte să cerem signed URL
+async function ensureObjectExists(access_token, bucket, objectKey) {
+  const r = await fetch(
+    `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
+    { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
+  );
+  const t = await r.text();
+  if (!r.ok) throw new Error(`object not found: ${t}`);
+}
+
+// folosim POST cu JSON + x-ads-region pentru signed download
 async function makeSignedDownload(access_token, bucket, objectKey, minutes = 60) {
   const r = await fetch(
-    `https://developer.api.autodesk.com/oss/v2/signeds3/download?bucketKey=${encodeURIComponent(bucket)}&objectKey=${encodeURIComponent(objectKey)}&minutesExpiration=${minutes}`,
-    { method: "POST", headers: { Authorization: `Bearer ${access_token}` } }
+    `https://developer.api.autodesk.com/oss/v2/signeds3/download`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        "Content-Type": "application/json",
+        ...REGION_HEADER
+      },
+      body: JSON.stringify({
+        bucketKey: bucket,
+        objectKey,
+        minutesExpiration: minutes
+      })
+    }
   );
   const t = await r.text();
   if (!r.ok) throw new Error(`signed download failed: ${t}`);
   return JSON.parse(t); // { url, expiration }
 }
 
+// folosim POST cu JSON + x-ads-region pentru signed upload
 async function makeSignedUpload(access_token, bucket, objectKey, minutes = 60) {
   const r = await fetch(
-    `https://developer.api.autodesk.com/oss/v2/signeds3/upload?bucketKey=${encodeURIComponent(bucket)}&objectKey=${encodeURIComponent(objectKey)}&minutesExpiration=${minutes}`,
-    { method: "POST", headers: { Authorization: `Bearer ${access_token}` } }
+    `https://developer.api.autodesk.com/oss/v2/signeds3/upload`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        "Content-Type": "application/json",
+        ...REGION_HEADER
+      },
+      body: JSON.stringify({
+        bucketKey: bucket,
+        objectKey,
+        minutesExpiration: minutes
+      })
+    }
   );
   const t = await r.text();
   if (!r.ok) throw new Error(`signed upload failed: ${t}`);
@@ -67,11 +104,14 @@ export default async function handler(req, res) {
     // 1) token
     const { access_token } = await getApsToken();
 
-    // 2) pre-signed URLs (input GET, output PUT)
+    // 2) validăm că obiectul există în bucket
+    await ensureObjectExists(access_token, bucket, objectKey);
+
+    // 3) pre-signed URLs (input GET, output PUT)
     const input = await makeSignedDownload(access_token, bucket, objectKey, 60);
     const output = await makeSignedUpload(access_token, bucket, resultKey, 60);
 
-    // 3) workitem către activitatea <clientId>.PlotToPDF
+    // 4) workitem către activitatea <clientId>.PlotToPDF
     const owner = ownerFromEnv();
     const activityId = `${owner}.PlotToPDF`;
 
@@ -84,14 +124,15 @@ export default async function handler(req, res) {
       headers: {
         Authorization: `Bearer ${access_token}`,
         "Content-Type": "application/json",
+        ...REGION_HEADER
       },
       body: JSON.stringify({
         activityId,
         arguments: {
-          inputFile: { url: input.url },           // GET din OSS
-          resultPdf: { url: output.url, verb: "put" }, // PUT în OSS
-          lisp: { url: lispUrl },                  // public GET
-          script: { url: scriptUrl },              // public GET
+          inputFile: { url: input.url },                // GET din OSS
+          resultPdf: { url: output.url, verb: "put" },  // PUT în OSS
+          lisp: { url: lispUrl },                       // public GET
+          script: { url: scriptUrl },                   // public GET
         },
       }),
     });
