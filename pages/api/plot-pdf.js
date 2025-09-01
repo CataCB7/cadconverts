@@ -1,10 +1,10 @@
 // pages/api/plot-pdf.js
-// Lansează un WorkItem (Automation API / Design Automation) pentru DWG/DXF -> PDF
-// Input body: { bucket, objectKey, outKey? }
-// Output: { ok, workitemId, resultKey }
+// Lansează un WorkItem (Design Automation) pentru DWG/DXF -> PDF
+// Body: { bucket, objectKey, outKey? }
+// Răspunde: { ok, workitemId, resultKey }
 
 const REGION = "us-east";
-const REGION_HEADER = { "x-ads-region": "US" }; // important pentru unele conturi/zones
+const REGION_HEADER = { "x-ads-region": "US" }; // important la DA/OSS
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
@@ -29,10 +29,10 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
 function ownerFromEnv() {
   const id = process.env.APS_CLIENT_ID;
   if (!id) throw new Error("Missing APS_CLIENT_ID");
-  return id; // folosim clientId ca owner
+  return id; // folosim clientId ca owner (<clientId>.PlotToPDF)
 }
 
-// verificăm că obiectul există înainte să cerem signed URL
+// verifică că obiectul există (și ia details)
 async function ensureObjectExists(access_token, bucket, objectKey) {
   const r = await fetch(
     `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
@@ -40,32 +40,10 @@ async function ensureObjectExists(access_token, bucket, objectKey) {
   );
   const t = await r.text();
   if (!r.ok) throw new Error(`object not found: ${t}`);
+  return t ? JSON.parse(t) : {};
 }
 
-// folosim POST cu JSON + x-ads-region pentru signed download
-async function makeSignedDownload(access_token, bucket, objectKey, minutes = 60) {
-  const r = await fetch(
-    `https://developer.api.autodesk.com/oss/v2/signeds3/download`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
-        ...REGION_HEADER
-      },
-      body: JSON.stringify({
-        bucketKey: bucket,
-        objectKey,
-        minutesExpiration: minutes
-      })
-    }
-  );
-  const t = await r.text();
-  if (!r.ok) throw new Error(`signed download failed: ${t}`);
-  return JSON.parse(t); // { url, expiration }
-}
-
-// folosim POST cu JSON + x-ads-region pentru signed upload
+// facem doar signed UPLOAD pentru rezultat (asta e stabilă)
 async function makeSignedUpload(access_token, bucket, objectKey, minutes = 60) {
   const r = await fetch(
     `https://developer.api.autodesk.com/oss/v2/signeds3/upload`,
@@ -104,14 +82,13 @@ export default async function handler(req, res) {
     // 1) token
     const { access_token } = await getApsToken();
 
-    // 2) validăm că obiectul există în bucket
+    // 2) validăm că obiectul există (dă 404 dacă e scris greșit)
     await ensureObjectExists(access_token, bucket, objectKey);
 
-    // 3) pre-signed URLs (input GET, output PUT)
-    const input = await makeSignedDownload(access_token, bucket, objectKey, 60);
+    // 3) pregătim uploadul rezultatului (PUT semnat)
     const output = await makeSignedUpload(access_token, bucket, resultKey, 60);
 
-    // 4) workitem către activitatea <clientId>.PlotToPDF
+    // 4) definim activity și argumentele
     const owner = ownerFromEnv();
     const activityId = `${owner}.PlotToPDF`;
 
@@ -119,6 +96,11 @@ export default async function handler(req, res) {
     const lispUrl = `${base}/da/plot.lsp`;
     const scriptUrl = `${base}/da/script.scr`;
 
+    // URL direct din OSS pentru input (fără signedS3), cu header Authorization
+    const directOssUrl =
+      `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}`;
+
+    // 5) creăm WorkItem: input GET cu header, output PUT pe URL semnat
     const wi = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/workitems`, {
       method: "POST",
       headers: {
@@ -129,10 +111,16 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         activityId,
         arguments: {
-          inputFile: { url: input.url },                // GET din OSS
-          resultPdf: { url: output.url, verb: "put" },  // PUT în OSS
-          lisp: { url: lispUrl },                       // public GET
-          script: { url: scriptUrl },                   // public GET
+          inputFile: {
+            url: directOssUrl,
+            headers: {
+              Authorization: `Bearer ${access_token}`,
+              "x-ads-region": "US"
+            }
+          },
+          resultPdf: { url: output.url, verb: "put" },
+          lisp: { url: lispUrl },
+          script: { url: scriptUrl },
         },
       }),
     });
