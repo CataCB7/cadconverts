@@ -7,7 +7,7 @@ const REGION_HEADER = { "x-ads-region": "US" };
 // IMPORTANT: Owner = client_id-ul tău real (din lista de activități DA).
 // În listă apare "EPmFz0UAj3EnrmZUiG2gsWNnp6355MphkqG6PKpXAqQ0gtXy.PlotToPDF+$LATEST"
 // Deci folosim pipe format + $LATEST:
-const OWNER_CLIENT_ID = "EPmFz0UAj3EnrmZUiG2gsWNnp6355MphkqQ0gtXy";
+const OWNER_CLIENT_ID = "EPmFz0UAj3EnrmZUiG2gsWNnp6355MphkqG6PKpXAqQ0gtXy";
 const ACTIVITY_ID = `${OWNER_CLIENT_ID}|PlotToPDF+$LATEST`; // <- CHEIA: ID corect
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
