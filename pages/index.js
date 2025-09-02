@@ -99,8 +99,40 @@ function makeOBJ(result) {
   return new Blob([text], { type: 'text/plain' })
 }
 
-// mic util pentru nume obiect fără spații
+// === helpers DWG/DXF → PDF (APS) ===
 const safeName = (name) => name.replace(/\s+/g, '-');
+const getExt = (name) => (name.split('.').pop() || '').toLowerCase();
+const isDwgDxf = (name) => {
+  const e = getExt(name);
+  return e === 'dwg' || e === 'dxf';
+};
+async function startMdConvert(bucket, objectKey) {
+  const r = await fetch("/api/convert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bucket, objectKey })
+  });
+  const data = await r.json();
+  if (!r.ok || !data.ok) throw new Error(data.error || "convert start failed");
+  return data.urn; // base64-url
+}
+async function pollMdSuccess(urn, { timeoutMs = 180000, intervalMs = 4000 } = {}) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const r = await fetch(`/api/convert-status?urn=${encodeURIComponent(urn)}`);
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || "status failed");
+    const st = data.manifest?.status || "";
+    if (st === "success") return true;
+    if (st === "failed") throw new Error("conversion failed");
+    await new Promise(res => setTimeout(res, intervalMs));
+  }
+  throw new Error("timeout waiting for conversion");
+}
+function triggerPdfDownload(urn, nameBase) {
+  const url = `/api/download-pdf?urn=${encodeURIComponent(urn)}&name=${encodeURIComponent(nameBase + ".pdf")}`;
+  window.location.href = url; // declanșează download
+}
 
 export default function Home() {
   // trial local
@@ -110,7 +142,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef(null)
 
-  // cloud APS (DWG/DXF → SVF2)
+  // cloud APS (DWG/DXF → SVF2 viewer)
   const cloudRef = useRef(null)
   const [cloudMsg, setCloudMsg] = useState('')
   const [cloudBusy, setCloudBusy] = useState(false)
@@ -131,30 +163,52 @@ export default function Home() {
     if (!email) { alert('Enter your email.'); return; }
     if (file.size > 20 * 1024 * 1024) { alert('>20MB. Upgrade to Pro for large files.'); return; }
 
-    const ext = (file.name.split('.').pop() || '').toLowerCase()
+    const ext = getExt(file.name)
     const canClientFree = (['step','stp','iges','igs'].includes(ext) && ['stl','obj'].includes(format))
 
     setUploading(true)
     try {
       if (canClientFree) {
+        // Conversie locală STEP/IGES → STL/OBJ (on-device)
         const occt = await loadOcct()
         const buf = new Uint8Array(await file.arrayBuffer())
         const params = { linearUnit: 'millimeter', linearDeflectionType: 'bounding_box_ratio', linearDeflection: 0.001, angularDeflection: 0.5 }
         const result = (ext === 'step' || ext === 'stp') ? occt.ReadStepFile(buf, params) : occt.ReadIgesFile(buf, params)
         if (!result?.success) throw new Error('Import failed')
 
-        let blob, outNameBase = file.name.replace(/\.[^.]+$/,'') || 'converted'
-        blob = format === 'stl' ? makeBinarySTL(result) : makeOBJ(result)
+        const outNameBase = file.name.replace(/\.[^.]+$/,'') || 'converted'
+        const blob = (format === 'stl') ? makeBinarySTL(result) : makeOBJ(result)
 
         const a = document.createElement('a')
         a.href = URL.createObjectURL(blob)
         a.download = `${outNameBase}.${format}`
         a.click()
-      } else {
-        // (încă hotfix local pentru alte formate – poți înlocui ulterior)
-        const res = await fetch(`/api/convert?format=${encodeURIComponent(format)}`, {
-          method: 'GET'
+      } else if (isDwgDxf(file.name) && format === 'pdf') {
+        // === DWG/DXF → PDF via APS (upload → convert → status → download) ===
+        const nameBase = file.name.replace(/\.[^.]+$/,'') || 'converted'
+        const { access_token } = await getApsToken()
+
+        // 1) upload în OSS prin proxy (păstrăm extensia originală, + timestamp)
+        const ext = getExt(file.name)
+        const objectKey = `${safeName(nameBase)}-${Date.now()}.${ext}`
+        const up = await uploadViaProxy(file, {
+          bucket: APS_BUCKET,
+          objectKey,
+          access_token
         })
+        if (!up?.ok) throw new Error('Upload failed')
+
+        // 2) start MD (SVF2 + PDF, cu FORCE) — /api/convert
+        const urn = await startMdConvert(APS_BUCKET, objectKey)
+
+        // 3) poll până la success
+        await pollMdSuccess(urn)
+
+        // 4) download PDF din manifest
+        triggerPdfDownload(urn, nameBase)
+      } else {
+        // fallback temporar (HOTFIX) pentru alte formate server-side
+        const res = await fetch(`/api/convert?format=${encodeURIComponent(format)}`, { method: 'GET' })
         if (!res.ok) throw new Error(await res.text())
         const cd = res.headers.get('content-disposition') || ''
         let name = `stub.${format}`
@@ -174,11 +228,11 @@ export default function Home() {
     }
   }
 
-  // === Cloud APS: DWG/DXF upload + convert to SVF2 + viewer link ===
+  // === Cloud APS: DWG/DXF upload + convert to SVF2 + viewer link (secțiune separată) ===
   async function handleCloudUploadAndView() {
     const file = cloudRef.current?.files?.[0]
     if (!file) { setCloudMsg('Alege un fișier DWG/DXF.'); return; }
-    const ext = (file.name.split('.').pop() || '').toLowerCase()
+    const ext = getExt(file.name)
     if (!['dwg','dxf'].includes(ext)) { setCloudMsg('Doar DWG/DXF pentru acest flux.'); return; }
 
     setCloudBusy(true)
@@ -205,11 +259,11 @@ export default function Home() {
       const data = await r.json()
       if (!r.ok || !data.ok) throw new Error(data.error || 'Job submit failed')
 
-      // Poll rapid (simplu) pentru manifest success
+      // Poll rapid pentru manifest success
       setCloudMsg('Converting...')
       const urn = data.urn
       let attempts = 0
-      while (attempts < 30) { // ~30 x 2s = 1 minut
+      while (attempts < 30) { // ~1 minut
         await new Promise(res => setTimeout(res, 2000))
         const s = await fetch(`/api/convert-status?urn=${encodeURIComponent(urn)}`).then(r => r.json())
         if (s.ok && s.manifest?.status === 'success') {
@@ -238,15 +292,15 @@ export default function Home() {
       <Hero />
       <Benefits />
 
-      {/* UI-ul tău de conversie (local client-side pentru STEP/IGES) */}
+      {/* UI-ul tău de conversie (local client-side pentru STEP/IGES + DWG→PDF cloud) */}
       <div id="convert" className="container">
         <div className="card">
           <h1 className="h1" style={{fontSize:24, marginBottom:12}}>Free Trial Converter</h1>
-          <p className="lead">2 free conversions. STEP/IGES are converted in your browser. DWG/DXF → cloud viewer.</p>
+          <p className="lead">2 free conversions. STEP/IGES are converted in your browser. DWG/DXF → PDF în cloud.</p>
 
           <div className="grid two" style={{marginTop:16}}>
             <div className="card">
-              <h3 className="font-semibold">1) Choose file (local)</h3>
+              <h3 className="font-semibold">1) Choose file</h3>
               <input
                 type="file"
                 ref={fileRef}
@@ -254,7 +308,7 @@ export default function Home() {
                 accept=".step,.stp,.iges,.igs,.stl,.obj,.dwg,.dxf,.pdf,.ipt,.iam"
               />
               <p className="lead" style={{marginTop:8, fontSize:13}}>
-                Free on-device: <b>STEP/STP, IGES/IGS → STL/OBJ</b>. Others fallback to server.
+                Free on-device: <b>STEP/STP, IGES/IGS → STL/OBJ</b>. DWG/DXF → PDF se face în cloud (APS).
               </p>
               <p className="lead" style={{marginTop:4, fontSize:13, color:'var(--muted)'}}>
                 Inventor (IPT/IAM) available on Pro plan — cloud conversion.
@@ -272,7 +326,7 @@ export default function Home() {
                   <option value="step">STEP (.step/.stp)</option>
                   <option value="iges">IGES (.igs/.iges)</option>
                   <option value="dxf">DXF (.dxf)</option>
-                  <option value="pdf">PDF (.pdf) — DWG/DXF only (cloud)</option>
+                  <option value="pdf">PDF (.pdf) — DWG/DXF (cloud)</option>
                   <option disabled>──────────────</option>
                   <option disabled>Inventor IPT/IAM → STEP (Pro)</option>
                   <option disabled>Inventor IPT/IAM → STL (Pro)</option>
@@ -301,11 +355,11 @@ export default function Home() {
         </div>
       </div>
 
-      {/* === Nou: Cloud (APS) — Upload & View pentru DWG/DXF === */}
+      {/* === Nou: Cloud (APS) — Upload & View pentru DWG/DXF, separat (opțional) === */}
       <div className="container" style={{ marginTop: 24 }}>
         <div className="card">
           <h2 className="h2" style={{fontSize:20, marginBottom:8}}>Cloud (APS) — Upload & View DWG/DXF</h2>
-        <p className="lead" style={{marginBottom:12}}>
+          <p className="lead" style={{marginBottom:12}}>
             Urcă în siguranță prin proxy-ul tău și vezi desenul în viewer (SVF2).
           </p>
           <div className="form-row" style={{gap: 12, alignItems: 'center'}}>
