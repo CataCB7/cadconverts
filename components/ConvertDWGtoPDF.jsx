@@ -1,47 +1,46 @@
 "use client";
 import React, { useCallback, useMemo, useRef, useState } from "react";
-// FOLOSIM helperii EXISTENȚI care la tine deja merg
+// folosim helperii tăi existenți (funcționează deja în alte secțiuni)
 import { getApsToken, uploadViaProxy } from "../utils/uploadViaProxy";
 
 const APS_BUCKET = "cadconverts-prod-us-123abc";
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // dacă e gol, folosește /api/... pe același domeniu
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // dacă e gol, rutele /api sunt locale
 
 const isDWGorDXF = (name) => /\.(dwg|dxf)$/i.test(name);
 const safeName = (name) => name.replace(/\s+/g, "-");
 
-function base64Url(input) {
+// === IMPORTANT: la tine e base64 standard (cu btoa), nu url-safe ===
+function toBase64(plain) {
   if (typeof window === "undefined") return "";
-  const b64 = window.btoa(input);
-  return b64.replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  return window.btoa(plain);
 }
 
 function urnFrom(bucket, objectKey) {
   return `urn:adsk.objects:os.object:${bucket}/${objectKey}`;
 }
 
-const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// === UPLOAD prin PROXY-ul tău (cu bucket + objectKey + token) ===
+// === Upload prin proxy-ul tău (bucket + objectKey + token) ===
 async function uploadToProxy(file) {
-  // 1) luăm tokenul APS
+  // 1) token APS
   const { access_token } = await getApsToken();
 
-  // 2) stabilim objectKey (nume sigur)
+  // 2) cheie sigură
   const objectKey = safeName(file.name);
 
-  // 3) urcăm prin helperul tău (știe formatul corect pt. proxy)
+  // 3) upload via helper-ul tău (știe formatul corect pt. proxy)
   const up = await uploadViaProxy(file, {
     bucket: APS_BUCKET,
     objectKey,
-    access_token, // helperul tău îl trimite cum cere proxy-ul (token/header)
+    access_token,
   });
 
   if (!up?.ok) {
-    // dacă proxy-ul a dat eroare, o propagăm clar
     throw new Error(up?.error || up?.message || "Upload failed");
   }
 
-  // 4) returnăm datele necesare pasului următor
+  // 4) return info
   return {
     bucket: APS_BUCKET,
     objectKey,
@@ -55,56 +54,72 @@ async function startConvertMD(params) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params), // { bucket, objectKey }
   });
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Convert start failed (${res.status}): ${text}`);
+    throw new Error(`Convert start failed (${res.status}): ${JSON.stringify(json)}`);
   }
-  return res.json();
+  // dacă backend-ul tău răspunde cu {ok:false, error:...} dar 200, prindem și asta:
+  if (json && json.ok === false) {
+    throw new Error(json.error || "Convert start returned ok:false");
+  }
+  return json; // îl păstrăm dacă vrei să-l folosești
 }
 
-async function pollStatusUntilSuccess(urnB64Url, opts) {
-  const timeoutMs = (opts && opts.timeoutMs) || 5 * 60 * 1000; // 5 min
-  const abortSignal = opts && opts.abortSignal;
-  let backoff = (opts && opts.intervalMs) || 2000; // 2s
+// === POLL robust: suportă atât {status} cât și { ok, manifest:{status} } ===
+async function pollStatusUntilSuccess(urnB64, { timeoutMs = 5 * 60 * 1000, intervalMs = 2000, abortSignal } = {}) {
   const start = Date.now();
+  let delay = intervalMs;
 
   while (true) {
-    if (abortSignal && abortSignal.aborted) throw new Error("Conversion canceled by user");
+    if (abortSignal?.aborted) throw new Error("Conversion canceled by user");
     if (Date.now() - start > timeoutMs) throw new Error("Timed out waiting for conversion");
 
-    const url = `${BASE_URL}/api/convert-status?urn=${encodeURIComponent(urnB64Url)}`;
+    const url = `${BASE_URL}/api/convert-status?urn=${encodeURIComponent(urnB64)}`;
     const res = await fetch(url);
+    const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Status error (${res.status}): ${text}`);
-    }
-    const json = await res.json();
-    if (json.status === "success") return json;
-    if (json.status === "failed") {
-      const msg = (json.details && json.details.message) || JSON.stringify(json.details || json);
-      throw new Error(`Conversion failed: ${msg}`);
+      throw new Error(`Status error (${res.status}): ${JSON.stringify(json)}`);
     }
 
-    await wait(backoff);
-    backoff = Math.min(backoff * 1.4, 8000);
+    // 1) formatul tău: { ok, manifest: { status } }
+    const manStatus = json?.manifest?.status;
+    if (json?.ok && manStatus) {
+      if (manStatus === "success") return json;
+      if (manStatus === "failed") {
+        const msg = json?.manifest?.derivatives?.[0]?.messages?.[0]?.message || "Conversion failed";
+        throw new Error(msg);
+      }
+      // inprogress -> continuăm
+    }
+
+    // 2) fallback: { status: "success" | "failed" | "inprogress" }
+    if (typeof json?.status === "string") {
+      if (json.status === "success") return json;
+      if (json.status === "failed") {
+        const msg = json?.details?.message || "Conversion failed";
+        throw new Error(msg);
+      }
+    }
+
+    await sleep(delay);
+    delay = Math.min(delay * 1.4, 8000);
   }
 }
 
-async function triggerDownloadPdf(urnB64Url, downloadName) {
-  const url = `${BASE_URL}/api/download-pdf?urn=${encodeURIComponent(urnB64Url)}&name=${encodeURIComponent(downloadName)}`;
+async function triggerDownloadPdf(urnB64, downloadName) {
+  const url = `${BASE_URL}/api/download-pdf?urn=${encodeURIComponent(urnB64)}&name=${encodeURIComponent(downloadName)}`;
   const res = await fetch(url);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Download failed (${res.status}): ${text}`);
   }
   const blob = await res.blob();
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = downloadName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(link.href);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = downloadName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 export default function ConvertDWGtoPDF() {
@@ -151,18 +166,19 @@ export default function ConvertDWGtoPDF() {
       setProgressNote("Uploading…");
       const { bucket, objectKey, urn } = await uploadToProxy(file);
 
+      // URN -> base64 standard (cum folosești deja în celelalte rute)
       const urnStr = urn.startsWith("urn:") ? urn : urnFrom(bucket, objectKey);
-      const urnB64Url = base64Url(urnStr);
+      const urnB64 = toBase64(urnStr);
 
       setStatus("converting");
       setProgressNote("Converting…");
-      await startConvertMD({ bucket, objectKey });
-      await pollStatusUntilSuccess(urnB64Url, { abortSignal: ac.signal });
+      await startConvertMD({ bucket, objectKey }); // dacă întoarce {ok:false}, acum aruncă eroare
+      await pollStatusUntilSuccess(urnB64, { abortSignal: ac.signal });
 
       setStatus("downloading");
       setProgressNote("Preparing download…");
-      const safe = file.name.replace(/\.(dwg|dxf)$/i, "");
-      await triggerDownloadPdf(urnB64Url, `${safe}.pdf`);
+      const base = file.name.replace(/\.(dwg|dxf)$/i, "");
+      await triggerDownloadPdf(urnB64, `${base}.pdf`);
 
       setStatus("done");
       setMessage("PDF descărcat cu succes ✅");
@@ -205,7 +221,7 @@ export default function ConvertDWGtoPDF() {
             {status === "uploading" || status === "converting" ? "Converting…" : "Convert & Download PDF"}
           </button>
 
-          {(status === "uploading" || status === "converting") && (
+        {(status === "uploading" || status === "converting") && (
             <button onClick={onCancel} className="px-3 py-2 rounded-2xl border">Cancel</button>
           )}
         </div>
@@ -217,9 +233,9 @@ export default function ConvertDWGtoPDF() {
         )}
 
         <ul className="text-xs text-gray-500 list-disc pl-5 mt-2">
-          <li>Upload prin proxy cu bucket+objectKey+token (exact ca în fluxul tău existent).</li>
-          <li>Fișiere &gt;100MB: plan Pro sau optimizează desenul.</li>
-          <li>După succes, descărcarea pornește automat.</li>
+          <li>Compatibil cu răspunsul tău `{ ok, manifest:{ status } }` la /api/convert-status.</li>
+          <li>Folosește URN în base64 standard (btoa), ca în celelalte rute.</li>
+          <li>După „success”, pornește download automat al PDF-ului.</li>
         </ul>
       </div>
     </div>
