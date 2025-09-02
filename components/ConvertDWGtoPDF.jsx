@@ -1,11 +1,13 @@
 "use client";
 import React, { useCallback, useMemo, useRef, useState } from "react";
+// FOLOSIM helperii EXISTENȚI care la tine deja merg
+import { getApsToken, uploadViaProxy } from "../utils/uploadViaProxy";
 
-// ---------------------- Helpers ----------------------
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // dacă e gol, folosește rutele relative (/api/...)
-const PROXY_UPLOAD = "https://proxy.cadconverts.com/upload"; // proxy-ul tău live
+const APS_BUCKET = "cadconverts-prod-us-123abc";
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // dacă e gol, folosește /api/... pe același domeniu
 
 const isDWGorDXF = (name) => /\.(dwg|dxf)$/i.test(name);
+const safeName = (name) => name.replace(/\s+/g, "-");
 
 function base64Url(input) {
   if (typeof window === "undefined") return "";
@@ -19,30 +21,39 @@ function urnFrom(bucket, objectKey) {
 
 const wait = (ms) => new Promise((res) => setTimeout(res, ms));
 
-// ---------------------- API Calls ----------------------
+// === UPLOAD prin PROXY-ul tău (cu bucket + objectKey + token) ===
 async function uploadToProxy(file) {
-  const fd = new FormData();
-  fd.append("file", file);
-  // dacă proxy-ul tău cere bucket/dir, adaugă aici: fd.append("bucket", "cadconverts-prod-us-123abc")
+  // 1) luăm tokenul APS
+  const { access_token } = await getApsToken();
 
-  const res = await fetch(PROXY_UPLOAD, { method: "POST", body: fd, credentials: "omit" });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Upload failed (${res.status}): ${text}`);
+  // 2) stabilim objectKey (nume sigur)
+  const objectKey = safeName(file.name);
+
+  // 3) urcăm prin helperul tău (știe formatul corect pt. proxy)
+  const up = await uploadViaProxy(file, {
+    bucket: APS_BUCKET,
+    objectKey,
+    access_token, // helperul tău îl trimite cum cere proxy-ul (token/header)
+  });
+
+  if (!up?.ok) {
+    // dacă proxy-ul a dat eroare, o propagăm clar
+    throw new Error(up?.error || up?.message || "Upload failed");
   }
-  const json = await res.json();
-  const bucket = json.bucket;
-  const objectKey = json.objectKey || json.object_key || json.key;
-  const urn = json.urn || urnFrom(bucket, objectKey);
-  if (!bucket || !objectKey) throw new Error("Proxy did not return bucket/objectKey");
-  return { bucket, objectKey, urn };
+
+  // 4) returnăm datele necesare pasului următor
+  return {
+    bucket: APS_BUCKET,
+    objectKey,
+    urn: urnFrom(APS_BUCKET, objectKey),
+  };
 }
 
 async function startConvertMD(params) {
   const res = await fetch(`${BASE_URL}/api/convert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+    body: JSON.stringify(params), // { bucket, objectKey }
   });
   if (!res.ok) {
     const text = await res.text();
@@ -96,7 +107,6 @@ async function triggerDownloadPdf(urnB64Url, downloadName) {
   URL.revokeObjectURL(link.href);
 }
 
-// ---------------------- UI Component ----------------------
 export default function ConvertDWGtoPDF() {
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("idle"); // idle|uploading|converting|downloading|done|error
@@ -151,8 +161,8 @@ export default function ConvertDWGtoPDF() {
 
       setStatus("downloading");
       setProgressNote("Preparing download…");
-      const safeName = file.name.replace(/\.(dwg|dxf)$/i, "");
-      await triggerDownloadPdf(urnB64Url, `${safeName}.pdf`);
+      const safe = file.name.replace(/\.(dwg|dxf)$/i, "");
+      await triggerDownloadPdf(urnB64Url, `${safe}.pdf`);
 
       setStatus("done");
       setMessage("PDF descărcat cu succes ✅");
@@ -160,7 +170,7 @@ export default function ConvertDWGtoPDF() {
     } catch (err) {
       console.error(err);
       setStatus("error");
-      setMessage(err && err.message ? err.message : "A apărut o eroare la conversie");
+      setMessage(err?.message || "A apărut o eroare la conversie");
     } finally {
       abortRef.current = null;
     }
@@ -207,8 +217,8 @@ export default function ConvertDWGtoPDF() {
         )}
 
         <ul className="text-xs text-gray-500 list-disc pl-5 mt-2">
-          <li>La erori, mesajul din API e redat pentru debugging rapid.</li>
-          <li>Fișiere &gt;100MB: sugerează planul Pro sau optimizează desenul (PURGE, OVERKILL).</li>
+          <li>Upload prin proxy cu bucket+objectKey+token (exact ca în fluxul tău existent).</li>
+          <li>Fișiere &gt;100MB: plan Pro sau optimizează desenul.</li>
           <li>După succes, descărcarea pornește automat.</li>
         </ul>
       </div>
