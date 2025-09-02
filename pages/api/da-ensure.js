@@ -1,9 +1,10 @@
 // pages/api/da-ensure.js
-// Creează/confirmă activitatea <clientId>.PlotToPDF și setează aliasul "prod" la ultima versiune
+// NU mai creează activitatea; doar găsește activitatea existentă <clientId>.PlotToPDF
+// și setează/actualizează aliasul "prod" către ultima versiune.
 
-const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // AutoCAD 2024 Core Console
 const REGION = "us-east";
 const REGION_HEADER = { "x-ads-region": "US" };
+const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // doar pt info
 
 function owner() {
   const id = process.env.APS_CLIENT_ID;
@@ -11,7 +12,7 @@ function owner() {
   return id;
 }
 
-async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create code:all") {
+async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
   if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
   const body = new URLSearchParams({
@@ -34,43 +35,18 @@ export default async function handler(req, res) {
     const { access_token } = await getApsToken();
     const actId = `${owner()}.PlotToPDF`;
 
-    // 1) vezi dacă există activitatea
-    let existing = null;
+    // 1) citește activitatea EXISTENTĂ
     const getAct = await fetch(
       `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(actId)}`,
       { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
     );
-    if (getAct.ok) {
-      existing = await getAct.json();
-    } else {
-      // 2) creează activitatea (fără appBundle; script+lisp vin din URL public)
-      const createBody = {
-        id: actId,
-        engine: ENGINE_ID,
-        commandLine: [
-          `$(engine.path)\\accoreconsole.exe /i "$(args[inputFile].path)" /s "$(args[script].path)" /lsp "$(args[lisp].path)"`
-        ],
-        parameters: {
-          inputFile: { verb: "get", localName: "input.dwg", description: "DWG/DXF input" },
-          resultPdf: { verb: "put", localName: "result.pdf", description: "PDF output" },
-          lisp:      { verb: "get", localName: "plot.lsp" },
-          script:    { verb: "get", localName: "script.scr" }
-        },
-        description: "Plot DWG/DXF to PDF using DWG To PDF.pc3"
-      };
-      const createAct = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/activities`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${access_token}`, "Content-Type": "application/json", ...REGION_HEADER },
-        body: JSON.stringify(createBody),
-      });
-      const t = await createAct.text();
-      if (!createAct.ok) {
-        return res.status(createAct.status).json({ ok:false, error:"create activity failed", details:t });
-      }
-      existing = t ? JSON.parse(t) : {};
+    const actText = await getAct.text();
+    if (!getAct.ok) {
+      return res.status(getAct.status).json({ ok:false, error:"activity not found", details: actText });
     }
+    const activity = actText ? JSON.parse(actText) : {};
 
-    // 3) află ultima versiune a activității
+    // 2) află ultima versiune
     const getVersions = await fetch(
       `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(actId)}/versions`,
       { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
@@ -78,10 +54,10 @@ export default async function handler(req, res) {
     const versions = getVersions.ok ? (await getVersions.json()) : { data: [] };
     const latest = (versions.data || []).sort((a,b)=>(b.version - a.version))[0];
     if (!latest?.version) {
-      return res.status(500).json({ ok:false, error:"No activity versions found" });
+      return res.status(500).json({ ok:false, error:"no versions for activity" });
     }
 
-    // 4) upsert alias "prod" -> latest.version
+    // 3) upsert alias "prod" -> ultima versiune
     const aliasId = `${actId}+prod`;
     const upsert = await fetch(
       `https://developer.api.autodesk.com/da/${REGION}/v3/aliases/${encodeURIComponent(aliasId)}`,
@@ -93,14 +69,14 @@ export default async function handler(req, res) {
     );
     const aliasText = await upsert.text();
     if (!upsert.ok) {
-      return res.status(upsert.status).json({ ok:false, error:"alias upsert failed", details:aliasText });
+      return res.status(upsert.status).json({ ok:false, error:"alias upsert failed", details: aliasText });
     }
 
     return res.status(200).json({
       ok:true,
-      activity: existing,
+      activity,
       latestVersion: latest.version,
-      alias: "prod"
+      alias:"prod"
     });
   } catch (e) {
     return res.status(500).json({ ok:false, error: String(e?.message || e) });
