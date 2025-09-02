@@ -1,10 +1,9 @@
 // pages/api/da-ensure.js
-// NU mai creează activitatea; doar găsește activitatea existentă <clientId>.PlotToPDF
-// și setează/actualizează aliasul "prod" către ultima versiune.
+// Găsește activitatea existentă <OWNER>|PlotToPDF sau <OWNER>.PlotToPDF
+// și setează/actualizează aliasul "prod" pe ultima versiune.
 
 const REGION = "us-east";
 const REGION_HEADER = { "x-ads-region": "US" };
-const ENGINE_ID = "Autodesk.AutoCAD+24_3"; // doar pt info
 
 function owner() {
   const id = process.env.APS_CLIENT_ID;
@@ -30,53 +29,68 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
   return r.json();
 }
 
-export default async function handler(req, res) {
+async function getJsonOrText(r) {
+  const t = await r.text();
+  try { return { ok: r.ok, status: r.status, data: t ? JSON.parse(t) : {} }; }
+  catch { return { ok: r.ok, status: r.status, data: t }; }
+}
+
+export default async function handler(_req, res) {
   try {
     const { access_token } = await getApsToken();
-    const actId = `${owner()}.PlotToPDF`;
+    const ow = owner();
 
-    // 1) citește activitatea EXISTENTĂ
-    const getAct = await fetch(
-      `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(actId)}`,
-      { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
-    );
-    const actText = await getAct.text();
-    if (!getAct.ok) {
-      return res.status(getAct.status).json({ ok:false, error:"activity not found", details: actText });
+    // încercăm întâi cu punct, apoi cu bară verticală
+    const ids = [
+      `${ow}.PlotToPDF`,
+      `${ow}|PlotToPDF`
+    ];
+
+    let actId = null;
+    let activity = null;
+
+    for (const id of ids) {
+      const r = await fetch(
+        `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(id)}`,
+        { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
+      );
+      const { ok, data } = await getJsonOrText(r);
+      if (ok) { actId = id; activity = data; break; }
     }
-    const activity = actText ? JSON.parse(actText) : {};
 
-    // 2) află ultima versiune
-    const getVersions = await fetch(
+    if (!actId) {
+      return res.status(404).json({ ok:false, error:"activity not found in either format (dot or pipe)" });
+    }
+
+    // versiuni
+    const versR = await fetch(
       `https://developer.api.autodesk.com/da/${REGION}/v3/activities/${encodeURIComponent(actId)}/versions`,
       { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
     );
-    const versions = getVersions.ok ? (await getVersions.json()) : { data: [] };
-    const latest = (versions.data || []).sort((a,b)=>(b.version - a.version))[0];
-    if (!latest?.version) {
-      return res.status(500).json({ ok:false, error:"no versions for activity" });
-    }
+    const { ok: okV, data: versions } = await getJsonOrText(versR);
+    if (!okV) return res.status(versR.status).json({ ok:false, error:"versions read failed", details: versions });
+    const list = (versions.data || []).sort((a,b)=> (b.version - a.version));
+    if (!list.length) return res.status(500).json({ ok:false, error:"no versions for activity" });
+    const latest = list[0].version;
 
-    // 3) upsert alias "prod" -> ultima versiune
-    const aliasId = `${actId}+prod`;
-    const upsert = await fetch(
+    // alias "prod"
+    const aliasId = `${actId}+prod`; // OBS: aceeași formă ca actId (dot sau pipe)
+    const aliasR = await fetch(
       `https://developer.api.autodesk.com/da/${REGION}/v3/aliases/${encodeURIComponent(aliasId)}`,
       {
         method: "PUT",
         headers: { Authorization: `Bearer ${access_token}`, "Content-Type":"application/json", ...REGION_HEADER },
-        body: JSON.stringify({ version: latest.version }),
+        body: JSON.stringify({ version: latest }),
       }
     );
-    const aliasText = await upsert.text();
-    if (!upsert.ok) {
-      return res.status(upsert.status).json({ ok:false, error:"alias upsert failed", details: aliasText });
-    }
+    const { ok: okA, data: aliasData } = await getJsonOrText(aliasR);
+    if (!okA) return res.status(aliasR.status).json({ ok:false, error:"alias upsert failed", details: aliasData });
 
     return res.status(200).json({
       ok:true,
-      activity,
-      latestVersion: latest.version,
-      alias:"prod"
+      resolvedActivityId: actId,   // spune forma acceptată de server
+      latestVersion: latest,
+      alias: "prod"
     });
   } catch (e) {
     return res.status(500).json({ ok:false, error: String(e?.message || e) });
