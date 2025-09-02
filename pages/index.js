@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic' // ← ADĂUGAT
 
 // importăm secțiunile de landing
 import Hero from "../components/Hero";
@@ -11,6 +12,9 @@ import FAQ from "../components/FAQ";
 import { getApsToken, uploadViaProxy } from "../utils/uploadViaProxy";
 
 const APS_BUCKET = "cadconverts-prod-us-123abc";
+
+// === ADĂUGAT: Componenta DWG→PDF (render only on client) ===
+const ConvertDWGtoPDF = dynamic(() => import("../components/ConvertDWGtoPDF"), { ssr: false });
 
 // încarcă occt-import-js din CDN o singură dată și întoarce instanța
 function loadOcct() {
@@ -301,7 +305,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* === Nou: Cloud (APS) — Upload & View pentru DWG/DXF === */}
+      {/* === Cloud (APS) — Upload & View pentru DWG/DXF (există deja) === */}
       <div className="container" style={{ marginTop: 24 }}>
         <div className="card">
           <h2 className="h2" style={{fontSize:20, marginBottom:8}}>Cloud (APS) — Upload & View DWG/DXF</h2>
@@ -328,6 +332,18 @@ export default function Home() {
               </a>
             </p>
           )}
+        </div>
+      </div>
+
+      {/* === NOU: DWG/DXF → PDF (Cloud Download, prin MD) === */}
+      <div className="container" style={{ marginTop: 24 }}>
+        <div className="card">
+          <h2 className="h2" style={{fontSize:20, marginBottom:8}}>DWG/DXF → PDF (Cloud Download)</h2>
+          <p className="lead" style={{marginBottom:12}}>
+            Generează PDF prin Autodesk Model Derivative și descarcă direct. Folosește proxy-ul și rutele tale /api.
+          </p>
+          {/* Componenta nouă care face upload → convert → status → download */}
+          <ConvertDWGtoPDF />
         </div>
       </div>
 
