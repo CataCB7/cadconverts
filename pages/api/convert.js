@@ -1,5 +1,5 @@
 // pages/api/convert.js
-// Lansare Model Derivative: DWG/DXF -> SVF2 (2D) + GENEREAZĂ și PDF în manifest
+// DWG/DXF -> SVF2 (2D) + PDF în manifest (FORCE re-translate)
 
 const REGION_HEADER = { "x-ads-region": "US" };
 
@@ -15,10 +15,11 @@ async function getApsToken() {
     client_id: APS_CLIENT_ID,
     client_secret: APS_CLIENT_SECRET,
   });
-  const r = await fetch(
-    "https://developer.api.autodesk.com/authentication/v2/token",
-    { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }
-  );
+  const r = await fetch("https://developer.api.autodesk.com/authentication/v2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
   if (!r.ok) throw new Error(`APS token failed: ${await r.text()}`);
   return r.json(); // { access_token }
 }
@@ -36,7 +37,8 @@ export default async function handler(req, res) {
     if (req.method === "GET") {
       return res.status(200).json({
         ok: true,
-        hint: "POST { bucket, objectKey } → start DWG/DXF → SVF2(+PDF) conversion.",
+        hint:
+          "POST { bucket, objectKey } → re-traduce DWG/DXF la SVF2 (2D) și pune PDF în manifest (x-ads-force).",
       });
     }
 
@@ -50,9 +52,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing bucket or objectKey" });
     }
 
+    // 1) token
     const { access_token } = await getApsToken();
 
-    // 1) Obține objectId ca să formăm URN-ul
+    // 2) object details -> objectId -> URN (base64-url fără 'urn:')
     const encodedKey = encodeURIComponent(objectKey);
     const det = await fetch(
       `https://developer.api.autodesk.com/oss/v2/buckets/${bucket}/objects/${encodedKey}/details`,
@@ -60,14 +63,15 @@ export default async function handler(req, res) {
     );
     const detText = await det.text();
     if (!det.ok) {
-      return res
-        .status(det.status)
-        .json({ error: "Failed to get object details", details: detText });
+      return res.status(det.status).json({
+        error: "Failed to get object details",
+        details: detText,
+      });
     }
     const details = detText ? JSON.parse(detText) : {};
-    const urn = toBase64Url(details.objectId); // fără prefix "urn:"
+    const urn = toBase64Url(details.objectId);
 
-    // 2) Lansăm jobul SVF2 + PDF (cheia e advanced.2dviews = "pdf")
+    // 3) job SVF2 + PDF, cu FORCE + destination.region
     const jobResp = await fetch(
       "https://developer.api.autodesk.com/modelderivative/v2/designdata/job",
       {
@@ -75,15 +79,21 @@ export default async function handler(req, res) {
         headers: {
           Authorization: `Bearer ${access_token}`,
           "Content-Type": "application/json",
-          ...REGION_HEADER,
+          "x-ads-region": "US",
+          "x-ads-force": "true", // <<< FORCE re-translate
         },
         body: JSON.stringify({
           input: { urn },
           output: {
+            destination: { region: "us" }, // <<< scrie derivative-urile în regiunea US
             formats: [
-              { type: "svf2", views: ["2d"], advanced: { "2dviews": "pdf" } }
-            ]
-          }
+              {
+                type: "svf2",
+                views: ["2d"],
+                advanced: { "2dviews": "pdf" }, // <<< generează PDF în manifest
+              },
+            ],
+          },
         }),
       }
     );
