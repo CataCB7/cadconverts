@@ -1,46 +1,29 @@
-// DWG→PDF Frontend Integration (Next.js + React + TypeScript)
-// Assumptions:
-// - You already have the backend routes live:
-//   POST   /api/convert                 -> starts MD job (SVF2 + PDF)
-//   GET    /api/convert-status?urn=...  -> polls MD manifest until success
-//   GET    /api/download-pdf?urn=...&name=... -> streams the PDF
-//   GET    /api/aps-token               -> (not used here, but exists)
-// - You have a proxy uploader at: https://proxy.cadconverts.com/upload
-//   which accepts multipart/form-data with the DWG/DXF file and returns JSON like:
-//   { bucket: string, objectKey: string, urn?: string }
-//   If `urn` is absent, we can derive it via Base64URL from bucket/objectKey
-//
-// Drop this file somewhere like: components/ConvertDWGtoPDF.tsx
-// Then import it in your main page.
-
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+"use client";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 
 // ---------------------- Helpers ----------------------
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // e.g., https://www.cadconverts.com
-const PROXY_UPLOAD = "https://proxy.cadconverts.com/upload"; // already live
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // dacă e gol, folosește rutele relative (/api/...)
+const PROXY_UPLOAD = "https://proxy.cadconverts.com/upload"; // proxy-ul tău live
 
-const isDWGorDXF = (name: string) => /\.(dwg|dxf)$/i.test(name);
+const isDWGorDXF = (name) => /\.(dwg|dxf)$/i.test(name);
 
-function base64Url(input: string) {
+function base64Url(input) {
   if (typeof window === "undefined") return "";
   const b64 = window.btoa(input);
   return b64.replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
-// Compute URN if backend/proxy does not return one
-function urnFrom(bucket: string, objectKey: string) {
+function urnFrom(bucket, objectKey) {
   return `urn:adsk.objects:os.object:${bucket}/${objectKey}`;
 }
 
-// Simple sleep
-const wait = (ms: number) => new Promise((res) => setTimeout(res, ms));
+const wait = (ms) => new Promise((res) => setTimeout(res, ms));
 
 // ---------------------- API Calls ----------------------
-async function uploadToProxy(file: File): Promise<{ bucket: string; objectKey: string; urn: string }>{
+async function uploadToProxy(file) {
   const fd = new FormData();
   fd.append("file", file);
-  // optional: target bucket or folder; if your proxy requires, add fields here
-  // fd.append("bucket", "cadconverts-prod-us-123abc");
+  // dacă proxy-ul tău cere bucket/dir, adaugă aici: fd.append("bucket", "cadconverts-prod-us-123abc")
 
   const res = await fetch(PROXY_UPLOAD, { method: "POST", body: fd, credentials: "omit" });
   if (!res.ok) {
@@ -55,7 +38,7 @@ async function uploadToProxy(file: File): Promise<{ bucket: string; objectKey: s
   return { bucket, objectKey, urn };
 }
 
-async function startConvertMD(params: { bucket: string; objectKey: string }) {
+async function startConvertMD(params) {
   const res = await fetch(`${BASE_URL}/api/convert`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -68,15 +51,14 @@ async function startConvertMD(params: { bucket: string; objectKey: string }) {
   return res.json();
 }
 
-async function pollStatusUntilSuccess(urnB64Url: string, opts?: { timeoutMs?: number; intervalMs?: number; abortSignal?: AbortSignal }) {
-  const timeoutMs = opts?.timeoutMs ?? 5 * 60 * 1000; // 5 minutes
-  const intervalMs = opts?.intervalMs ?? 2000; // 2s
+async function pollStatusUntilSuccess(urnB64Url, opts) {
+  const timeoutMs = (opts && opts.timeoutMs) || 5 * 60 * 1000; // 5 min
+  const abortSignal = opts && opts.abortSignal;
+  let backoff = (opts && opts.intervalMs) || 2000; // 2s
   const start = Date.now();
-  // Exponential backoff cap
-  let backoff = intervalMs;
 
   while (true) {
-    if (opts?.abortSignal?.aborted) throw new Error("Conversion canceled by user");
+    if (abortSignal && abortSignal.aborted) throw new Error("Conversion canceled by user");
     if (Date.now() - start > timeoutMs) throw new Error("Timed out waiting for conversion");
 
     const url = `${BASE_URL}/api/convert-status?urn=${encodeURIComponent(urnB64Url)}`;
@@ -86,10 +68,9 @@ async function pollStatusUntilSuccess(urnB64Url: string, opts?: { timeoutMs?: nu
       throw new Error(`Status error (${res.status}): ${text}`);
     }
     const json = await res.json();
-    // Expecting something like { status: 'success' | 'inprogress' | 'failed', details?: any }
     if (json.status === "success") return json;
     if (json.status === "failed") {
-      const msg = json.details?.message || JSON.stringify(json.details || json);
+      const msg = (json.details && json.details.message) || JSON.stringify(json.details || json);
       throw new Error(`Conversion failed: ${msg}`);
     }
 
@@ -98,7 +79,7 @@ async function pollStatusUntilSuccess(urnB64Url: string, opts?: { timeoutMs?: nu
   }
 }
 
-async function triggerDownloadPdf(urnB64Url: string, downloadName: string) {
+async function triggerDownloadPdf(urnB64Url, downloadName) {
   const url = `${BASE_URL}/api/download-pdf?urn=${encodeURIComponent(urnB64Url)}&name=${encodeURIComponent(downloadName)}`;
   const res = await fetch(url);
   if (!res.ok) {
@@ -117,16 +98,19 @@ async function triggerDownloadPdf(urnB64Url: string, downloadName: string) {
 
 // ---------------------- UI Component ----------------------
 export default function ConvertDWGtoPDF() {
-  const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<"idle" | "uploading" | "converting" | "downloading" | "done" | "error">("idle");
-  const [message, setMessage] = useState<string>("");
-  const [progressNote, setProgressNote] = useState<string>("");
-  const abortRef = useRef<AbortController | null>(null);
+  const [file, setFile] = useState(null);
+  const [status, setStatus] = useState("idle"); // idle|uploading|converting|downloading|done|error
+  const [message, setMessage] = useState("");
+  const [progressNote, setProgressNote] = useState("");
+  const abortRef = useRef(null);
 
-  const disabled = useMemo(() => status === "uploading" || status === "converting" || status === "downloading", [status]);
+  const disabled = useMemo(
+    () => status === "uploading" || status === "converting" || status === "downloading",
+    [status]
+  );
 
-  const onFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] || null;
+  const onFileChange = useCallback((e) => {
+    const f = (e.target.files && e.target.files[0]) || null;
     setFile(f);
     setMessage("");
     setStatus("idle");
@@ -143,8 +127,8 @@ export default function ConvertDWGtoPDF() {
       setStatus("error");
       return;
     }
-    if (file.size > 100 * 1024 * 1024) { // 100MB soft limit -> push to Pro
-      setMessage("Fișierul depășește 100MB. Te rugăm treci pe planul Pro sau comprimă desenul.");
+    if (file.size > 100 * 1024 * 1024) {
+      setMessage("Fișierul depășește 100MB. Treci pe planul Pro sau optimizează desenul (PURGE/OVERKILL).");
       setStatus("error");
       return;
     }
@@ -157,7 +141,6 @@ export default function ConvertDWGtoPDF() {
       setProgressNote("Uploading…");
       const { bucket, objectKey, urn } = await uploadToProxy(file);
 
-      // URN must be base64url for MD endpoints
       const urnStr = urn.startsWith("urn:") ? urn : urnFrom(bucket, objectKey);
       const urnB64Url = base64Url(urnStr);
 
@@ -174,17 +157,17 @@ export default function ConvertDWGtoPDF() {
       setStatus("done");
       setMessage("PDF descărcat cu succes ✅");
       setProgressNote("");
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
       setStatus("error");
-      setMessage(err?.message || "A apărut o eroare la conversie");
+      setMessage(err && err.message ? err.message : "A apărut o eroare la conversie");
     } finally {
       abortRef.current = null;
     }
   }, [file]);
 
   const onCancel = useCallback(() => {
-    abortRef.current?.abort();
+    if (abortRef.current) abortRef.current.abort();
     setProgressNote("");
     setStatus("idle");
     setMessage("Conversie anulată");
@@ -212,24 +195,19 @@ export default function ConvertDWGtoPDF() {
             {status === "uploading" || status === "converting" ? "Converting…" : "Convert & Download PDF"}
           </button>
 
-          { (status === "uploading" || status === "converting") && (
-            <button
-              onClick={onCancel}
-              className="px-3 py-2 rounded-2xl border"
-            >Cancel</button>
+          {(status === "uploading" || status === "converting") && (
+            <button onClick={onCancel} className="px-3 py-2 rounded-2xl border">Cancel</button>
           )}
         </div>
 
-        {progressNote && (
-          <div className="text-sm text-gray-700">{progressNote}</div>
-        )}
+        {progressNote && <div className="text-sm text-gray-700">{progressNote}</div>}
 
         {message && (
           <div className={`text-sm ${status === "error" ? "text-red-600" : "text-green-700"}`}>{message}</div>
         )}
 
         <ul className="text-xs text-gray-500 list-disc pl-5 mt-2">
-          <li>La erori, mesajul din API e afișat ca să vezi rapid cauza (ex. lipsă permisiuni, format invalid).</li>
+          <li>La erori, mesajul din API e redat pentru debugging rapid.</li>
           <li>Fișiere &gt;100MB: sugerează planul Pro sau optimizează desenul (PURGE, OVERKILL).</li>
           <li>După succes, descărcarea pornește automat.</li>
         </ul>
@@ -237,29 +215,3 @@ export default function ConvertDWGtoPDF() {
     </div>
   );
 }
-
-// ---------------------- Optional: Minimal index page hook ----------------------
-// In your main page (e.g., app/page.tsx or pages/index.tsx), mount the component:
-//
-// import dynamic from "next/dynamic";
-// const ConvertDWGtoPDF = dynamic(() => import("@/components/ConvertDWGtoPDF"), { ssr: false });
-//
-// export default function Home() {
-//   return (
-//     <main className="min-h-screen p-6">
-//       <div className="max-w-5xl mx-auto">
-//         {/* Existing hero & steps here */}
-//         <section id="convert" className="mt-10">
-//           <ConvertDWGtoPDF />
-//         </section>
-//       </div>
-//     </main>
-//   );
-// }
-
-// ---------------------- Notes ----------------------
-// 1) Ensure NEXT_PUBLIC_BASE_URL is set on Vercel to https://www.cadconverts.com (or your preview URL).
-// 2) If your proxy requires auth/header, add it in uploadToProxy().
-// 3) If your backend /api/convert expects a different JSON shape, adjust startConvertMD().
-// 4) The URN we poll and download is base64url(urn:adsk.objects:os.object:<bucket>/<objectKey>). If your backend expects plain URN, remove base64Url().
-// 5) For better UX, you can auto-scroll to the Download button or start the download automatically (already implemented).
