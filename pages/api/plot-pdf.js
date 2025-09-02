@@ -1,20 +1,20 @@
 // pages/api/plot-pdf.js
-// Pornește WorkItem DWG/DXF -> PDF fără signedS3; încearcă US/EU × dot/pipe + alias "prod".
+// WorkItem (Design Automation) DWG/DXF -> PDF fără signedS3 (folosește OSS direct cu Authorization)
 
-const CANDIDATE_REGIONS = [
-  { path: "us-east", hdr: "US"   },
-  { path: "eu",      hdr: "EMEA" },
-];
+const REGION = "us-east";
+const REGION_HEADER = { "x-ads-region": "US" };
 
-function ownerFromEnv() {
-  const id = process.env.APS_CLIENT_ID;
-  if (!id) throw new Error("Missing APS_CLIENT_ID");
-  return id;
-}
+// IMPORTANT: Owner = client_id-ul tău real (din lista de activități DA).
+// În listă apare "EPmFz0UAj3EnrmZUiG2gsWNnp6355MphkqG6PKpXAqQ0gtXy.PlotToPDF+$LATEST"
+// Deci folosim pipe format + $LATEST:
+const OWNER_CLIENT_ID = "EPmFz0UAj3EnrmZUiG2gsWNnp6355MphkqQ0gtXy";
+const ACTIVITY_ID = `${OWNER_CLIENT_ID}|PlotToPDF+$LATEST`; // <- CHEIA: ID corect
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
-  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
+  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
+    throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
+  }
   const body = new URLSearchParams({
     client_id: APS_CLIENT_ID,
     client_secret: APS_CLIENT_SECRET,
@@ -30,13 +30,14 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
   return r.json();
 }
 
-async function ensureObjectExists(access_token, bucket, objectKey, regionHdr) {
+async function ensureObjectExists(access_token, bucket, objectKey) {
   const r = await fetch(
     `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
-    { headers: { Authorization: `Bearer ${access_token}`, "x-ads-region": regionHdr } }
+    { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
   );
   const t = await r.text();
   if (!r.ok) throw new Error(`object not found: ${t}`);
+  return t ? JSON.parse(t) : {};
 }
 
 export default async function handler(req, res) {
@@ -45,87 +46,76 @@ export default async function handler(req, res) {
       res.setHeader("Allow", ["POST"]);
       return res.status(405).json({ error: "Method not allowed" });
     }
-    const { bucket, objectKey, outKey } = req.body || {};
-    if (!bucket || !objectKey) return res.status(400).json({ error: "Missing bucket or objectKey" });
 
+    const { bucket, objectKey, outKey } = req.body || {};
+    if (!bucket || !objectKey) {
+      return res.status(400).json({ error: "Missing bucket or objectKey" });
+    }
+
+    // rezultatul îl numim unic ca să nu suprascriem
     const baseName = objectKey.replace(/\.[^.]+$/, "");
     const resultKey = outKey || `${baseName}-${Date.now()}.pdf`;
 
+    // 1) token
     const { access_token } = await getApsToken();
-    const owner = ownerFromEnv();
 
-    const idForms = [`${owner}.PlotToPDF+prod`, `${owner}|PlotToPDF+prod`];
+    // 2) validăm inputul există în OSS
+    await ensureObjectExists(access_token, bucket, objectKey);
 
-    // URL-uri OSS directe
+    // 3) URL-uri OSS directe (DA va face GET/PUT cu header Authorization)
     const inputUrl  = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}`;
     const outputUrl = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(resultKey)}`;
 
+    // LISP + script din site (public)
     const base = process.env.NEXT_PUBLIC_BASE_URL || "https://www.cadconverts.com";
     const lispUrl = `${base}/da/plot.lsp`;
     const scriptUrl = `${base}/da/script.scr`;
 
-    const errors = [];
-
-    // Încercăm toate combinațiile până reușește una
-    for (const region of CANDIDATE_REGIONS) {
-      try {
-        await ensureObjectExists(access_token, bucket, objectKey, region.hdr);
-      } catch (e) {
-        // continuăm — obiectul se poate valida și fără header; nu blocăm
-      }
-
-      for (const activityId of idForms) {
-        const wiUrl = `https://developer.api.autodesk.com/da/${region.path}/v3/workitems`;
-        const wi = await fetch(wiUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${access_token}`,
-            "Content-Type": "application/json",
-            "x-ads-region": region.hdr
-          },
-          body: JSON.stringify({
-            activityId,
-            arguments: {
-              inputFile: {
-                url: inputUrl,
-                headers: {
-                  Authorization: `Bearer ${access_token}`,
-                  "x-ads-region": region.hdr
-                }
-              },
-              resultPdf: {
-                url: outputUrl,
-                verb: "put",
-                headers: {
-                  Authorization: `Bearer ${access_token}`,
-                  "Content-Type": "application/octet-stream",
-                  "x-ads-region": region.hdr
-                }
-              },
-              lisp:   { url: lispUrl },
-              script: { url: scriptUrl }
+    // 4) Creează WorkItem
+    const wi = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/workitems`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${access_token}`,
+        "Content-Type": "application/json",
+        ...REGION_HEADER
+      },
+      body: JSON.stringify({
+        // !!! activitatea corectă, cu owner-ul tău real + $LATEST
+        activityId: ACTIVITY_ID,
+        arguments: {
+          inputFile: {
+            url: inputUrl,
+            headers: {
+              Authorization: `Bearer ${access_token}`,
+              "x-ads-region": "US"
             }
-          })
-        });
-
-        const txt = await wi.text();
-        if (wi.ok) {
-          const data = txt ? JSON.parse(txt) : {};
-          return res.status(200).json({
-            ok: true,
-            workitemId: data.id || data.workitemId || null,
-            resultKey,
-            regionUsed: region.path,
-            activityUsed: activityId
-          });
-        } else {
-          errors.push({ region: region.path, activityId, status: wi.status, details: txt });
+          },
+          resultPdf: {
+            url: outputUrl,
+            verb: "put",
+            headers: {
+              Authorization: `Bearer ${access_token}`,
+              "Content-Type": "application/octet-stream",
+              "x-ads-region": "US"
+            }
+          },
+          lisp:   { url: lispUrl },
+          script: { url: scriptUrl }
         }
-      }
-    }
+      })
+    });
 
-    return res.status(400).json({ ok:false, error: "workitem create failed in all combinations", attempts: errors });
+    const wiText = await wi.text();
+    if (!wi.ok) {
+      return res.status(wi.status).json({ error: "workitem create failed", details: wiText });
+    }
+    const wiData = wiText ? JSON.parse(wiText) : {};
+    return res.status(200).json({
+      ok: true,
+      workitemId: wiData.id || wiData.workitemId || null,
+      resultKey
+    });
   } catch (e) {
-    return res.status(500).json({ ok:false, error: String(e?.message || e) });
+    return res.status(500).json({ error: String(e?.message || e) });
   }
 }
