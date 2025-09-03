@@ -1,121 +1,123 @@
 // pages/api/plot-pdf.js
-// WorkItem (Design Automation) DWG/DXF -> PDF (AutoCAD.PlotToPDF+25_0)
-// INPUT: link presemnat (signedresource) din OSS — fără headere
-// OUTPUT: POST către proxy-ul tău /ingest-pdf (proxy urcă PDF-ul în OSS)
-
-const REGION = "us-east";
-const REGION_HEADER = { "x-ads-region": "US" };
-
-async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
-  const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
-  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
-    throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
-  }
-  const body = new URLSearchParams({
-    client_id: APS_CLIENT_ID,
-    client_secret: APS_CLIENT_SECRET,
-    grant_type: "client_credentials",
-    scope: scopes,
-  });
-  const r = await fetch("https://developer.api.autodesk.com/authentication/v2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-async function ensureObjectExists(access_token, bucket, objectKey) {
-  const r = await fetch(
-    `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
-    { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
-  );
-  const t = await r.text();
-  if (!r.ok) throw new Error(`object not found: ${t}`);
-  return t ? JSON.parse(t) : {};
-}
-
-// <<< NOU: ia URL-ul presemnat pentru download (fără headere) >>>
-async function getSignedInputUrl(access_token, bucket, objectKey) {
-  const r = await fetch(
-    `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/signedresource`,
-    { method: "GET", headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
-  );
-  const t = await r.text();
-  if (!r.ok) throw new Error(`signedresource failed: ${t}`);
-  const j = t ? JSON.parse(t) : {};
-  if (!j.url) throw new Error("signedresource: missing url");
-  return j.url;
-}
-
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      res.setHeader("Allow", ["POST"]);
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const { bucket, objectKey, outKey } = req.body || {};
-    if (!bucket || !objectKey) {
-      return res.status(400).json({ error: "Missing bucket or objectKey" });
+    // 1) parametri din request (sau default pentru test)
+    const {
+      bucket = "cadconverts-prod-us-123abc",
+      objectKey = "rigle_311r.dwg",
+      region = "US",                         // APS region pentru OSS/DA
+      proxyBase = "https://proxy.cadconverts.com", // domeniul tău de proxy (schimbă dacă e altul)
+    } = req.body || {};
+
+    // 2) token APS din backendul tău (routa deja există)
+    const tokResp = await fetch("https://www.cadconverts.com/api/aps-token");
+    if (!tokResp.ok) {
+      const t = await tokResp.text();
+      return res.status(500).json({ error: "Token fetch failed", body: t });
+    }
+    const { access_token } = await tokResp.json();
+    const auth = `Bearer ${access_token}`;
+
+    // 3) obține **SIGNED S3 DOWNLOAD** pentru DWG (cheia trebuie URL-encodată)
+    const encKey = encodeURIComponent(objectKey);
+    const s3Resp = await fetch(
+      `https://developer.api.autodesk.com/oss/v2/buckets/${bucket}/objects/${encKey}/signeds3download`,
+      {
+        headers: {
+          Authorization: auth,
+          "x-ads-region": region, // important: US pentru bucket US
+        },
+      }
+    );
+
+    if (!s3Resp.ok) {
+      const body = await s3Resp.text();
+      return res
+        .status(s3Resp.status)
+        .json({ error: "signeds3download failed", body });
     }
 
-    const baseName = objectKey.replace(/\.[^.]+$/, "");
-    const resultKey = outKey || `${baseName}-${Date.now()}.pdf`;
+    // Răspunsul poate avea .url sau .signedUrl; folosim ce găsim
+    const s3Json = await s3Resp.json();
+    const hostDwgUrl = s3Json.url || s3Json.signedUrl;
+    if (!hostDwgUrl) {
+      return res.status(500).json({
+        error: "No signed S3 URL in response",
+        got: s3Json,
+      });
+    }
 
-    // 1) token
-    const { access_token } = await getApsToken();
+    // 4) pregătește ieșirea: trimitem PDF-ul în PROXY prin POST /ingest-pdf
+    //    (nu adăuga HEADERS la HostDwg; DA va lua direct din S3)
+    const outName = objectKey.replace(/\.dwg$/i, "") + ".pdf";
+    const ingestUrl = `${proxyBase}/ingest-pdf?bucket=${encodeURIComponent(
+      bucket
+    )}&objectKey=${encodeURIComponent(outName)}&source=plot2pdf`;
 
-    // 2) validăm inputul
-    await ensureObjectExists(access_token, bucket, objectKey);
-
-    // 3) activitatea publică AutoCAD pentru plot la PDF
-    const activityId = "AutoCAD.PlotToPDF+25_0";
-
-    // 4) INPUT: URL presemnat (fără headere)
-    const inputUrl = await getSignedInputUrl(access_token, bucket, objectKey);
-
-    // 5) OUTPUT: proxy-ul tău primește PDF-ul prin POST și îl urcă în OSS
-    const proxyBase = process.env.NEXT_PUBLIC_PROXY_BASE || "https://proxy.cadconverts.com";
-    const ingestUrl = `${proxyBase}/ingest-pdf?bucket=${encodeURIComponent(bucket)}&objectKey=${encodeURIComponent(resultKey)}`;
-
-    // 6) Creează WorkItem
-    const wi = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/workitems`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${access_token}`,
-        "Content-Type": "application/json",
-        ...REGION_HEADER
+    // 5) creează WorkItem pe DA v3 (us-east)
+    const workitemPayload = {
+      activityId: "AutoCAD.PlotToPDF+25_0",
+      arguments: {
+        HostDwg: {
+          url: hostDwgUrl, // <— AICI E MAGIA: URL S3 semnat, fără headers!
+        },
+        ResultPdf: {
+          url: ingestUrl,
+          verb: "post",
+        },
       },
-      body: JSON.stringify({
-        activityId,
-        arguments: {
-          // Numele parametrilor trebuie să se potrivească activității shared
-          HostDwg: {
-            url: inputUrl,
-            verb: "get" // fără headere la signedresource
-          },
-          Result: {
-            url: ingestUrl,
-            headers: { "Content-Type": "application/pdf" },
-            verb: "post" // DA va POST-a PDF-ul la /ingest-pdf
-          }
-        }
-      })
-    });
+    };
 
-    const wiText = await wi.text();
-    if (!wi.ok) {
-      return res.status(wi.status).json({ error: "workitem create failed", details: wiText });
+    const daResp = await fetch(
+      "https://developer.api.autodesk.com/da/us-east/v3/workitems",
+      {
+        method: "POST",
+        headers: {
+          Authorization: auth,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(workitemPayload),
+      }
+    );
+
+    const daText = await daResp.text();
+    if (!daResp.ok) {
+      return res.status(daResp.status).json({
+        error: "DA workitem create failed",
+        body: daText,
+      });
     }
-    const wiData = wiText ? JSON.parse(wiText) : {};
-    return res.status(200).json({
-      ok: true,
-      workitemId: wiData.id || wiData.workitemId || null,
-      resultKey
-    });
-  } catch (e) {
-    return res.status(500).json({ error: String(e?.message || e) });
+
+    // 6) trimite răspunsul către client (id-ul WI + echo parametri utili)
+    try {
+      const daJson = JSON.parse(daText);
+      return res.status(200).json({
+        message: "workitem created",
+        workitem: daJson,
+        used: {
+          bucket,
+          objectKey,
+          hostDwgUrlPreview: hostDwgUrl.slice(0, 80) + "...",
+          ingestUrlPreview: ingestUrl,
+        },
+      });
+    } catch {
+      return res.status(200).json({
+        message: "workitem created",
+        raw: daText,
+        used: {
+          bucket,
+          objectKey,
+          hostDwgUrlPreview: hostDwgUrl.slice(0, 80) + "...",
+          ingestUrlPreview: ingestUrl,
+        },
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || String(err) });
   }
 }
