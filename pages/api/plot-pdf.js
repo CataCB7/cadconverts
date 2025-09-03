@@ -60,17 +60,16 @@ export default async function handler(req, res) {
 
     // 5) creează WorkItem pe DA v3 (us-east)
     const workitemPayload = {
-      activityId: "AutoCAD.PlotToPDF+25_0",
-      arguments: {
-        HostDwg: {
-          url: hostDwgUrl, // <— AICI E MAGIA: URL S3 semnat, fără headers!
-        },
-        ResultPdf: {
-          url: ingestUrl,
-          verb: "post",
-        },
-      },
-    };
+  activityId: "AutoCAD.PlotToPDF+25_0",
+  arguments: {
+    HostDwg: { url: hostDwgUrl },
+    Result: {                    // ✅ numele corect
+      url: ingestUrl,
+      verb: "post",
+    },
+  },
+};
+
 
     const daResp = await fetch(
       "https://developer.api.autodesk.com/da/us-east/v3/workitems",
