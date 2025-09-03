@@ -1,6 +1,7 @@
 // pages/api/plot-pdf.js
-// WorkItem (Design Automation) DWG/DXF -> PDF
-// Folosește input din OSS (cu token) și TRIMITE PDF-ul către proxy-ul tău /ingest-pdf (POST)
+// WorkItem (Design Automation) DWG/DXF -> PDF (AutoCAD.PlotToPDF+25_0)
+// INPUT: link presemnat (signedresource) din OSS — fără headere
+// OUTPUT: POST către proxy-ul tău /ingest-pdf (proxy urcă PDF-ul în OSS)
 
 const REGION = "us-east";
 const REGION_HEADER = { "x-ads-region": "US" };
@@ -25,12 +26,6 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
   return r.json();
 }
 
-function ownerFromEnv() {
-  const id = process.env.APS_CLIENT_ID;
-  if (!id) throw new Error("Missing APS_CLIENT_ID");
-  return id; // <clientId>.PlotToPDF
-}
-
 async function ensureObjectExists(access_token, bucket, objectKey) {
   const r = await fetch(
     `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
@@ -39,6 +34,19 @@ async function ensureObjectExists(access_token, bucket, objectKey) {
   const t = await r.text();
   if (!r.ok) throw new Error(`object not found: ${t}`);
   return t ? JSON.parse(t) : {};
+}
+
+// <<< NOU: ia URL-ul presemnat pentru download (fără headere) >>>
+async function getSignedInputUrl(access_token, bucket, objectKey) {
+  const r = await fetch(
+    `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/signedresource`,
+    { method: "GET", headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
+  );
+  const t = await r.text();
+  if (!r.ok) throw new Error(`signedresource failed: ${t}`);
+  const j = t ? JSON.parse(t) : {};
+  if (!j.url) throw new Error("signedresource: missing url");
+  return j.url;
 }
 
 export default async function handler(req, res) {
@@ -62,16 +70,17 @@ export default async function handler(req, res) {
     // 2) validăm inputul
     await ensureObjectExists(access_token, bucket, objectKey);
 
-    // 3) activitate DA shared
-    const activityId = "AutoCAD.PlotToPDF+25_0"; // activitatea publică
+    // 3) activitatea publică AutoCAD pentru plot la PDF
+    const activityId = "AutoCAD.PlotToPDF+25_0";
 
-    // 4) URL-uri: input din OSS cu Authorization header; output = PROXY (POST)
-    const inputUrl  = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}`;
+    // 4) INPUT: URL presemnat (fără headere)
+    const inputUrl = await getSignedInputUrl(access_token, bucket, objectKey);
 
-    // proxy public (domeniul tău) care va primi PDF-ul și îl urcă în OSS cu token server-to-server
-    const proxyBase = process.env.NEXT_PUBLIC_PROXY_BASE || "https://proxy.cadconverts.com"; // <- dacă nu ai subdomeniu, pune direct "https://<IP>:3000"
+    // 5) OUTPUT: proxy-ul tău primește PDF-ul prin POST și îl urcă în OSS
+    const proxyBase = process.env.NEXT_PUBLIC_PROXY_BASE || "https://proxy.cadconverts.com";
     const ingestUrl = `${proxyBase}/ingest-pdf?bucket=${encodeURIComponent(bucket)}&objectKey=${encodeURIComponent(resultKey)}`;
 
+    // 6) Creează WorkItem
     const wi = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/workitems`, {
       method: "POST",
       headers: {
@@ -82,20 +91,15 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         activityId,
         arguments: {
+          // Numele parametrilor trebuie să se potrivească activității shared
           HostDwg: {
             url: inputUrl,
-            headers: {
-              Authorization: `Bearer ${access_token}`,
-              "x-ads-region": "US"
-            },
-            verb: "get"
+            verb: "get" // fără headere la signedresource
           },
           Result: {
             url: ingestUrl,
-            headers: {
-              "Content-Type": "application/pdf"
-            },
-            verb: "post" // foarte important: DA va POST-a PDF-ul la /ingest-pdf
+            headers: { "Content-Type": "application/pdf" },
+            verb: "post" // DA va POST-a PDF-ul la /ingest-pdf
           }
         }
       })
