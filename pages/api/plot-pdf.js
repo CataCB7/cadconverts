@@ -1,22 +1,16 @@
 // pages/api/plot-pdf.js
-// Lansează un WorkItem DA (AutoCAD Plot to PDF) folosind proxy-ul tău
-// pentru download/upload din/în OSS (evităm endpointurile „legacy”).
-//
-// Input:  POST { bucket, objectKey, outKey? }
-// Output: { ok, workitemId, resultKey }
+// WorkItem (Design Automation) DWG/DXF -> PDF
+// Folosește input din OSS (cu token) și TRIMITE PDF-ul către proxy-ul tău /ingest-pdf (POST)
 
-const REGION = "us-east"; // clustere DA
-const DA_ACTIVITY = "AutoCAD.PlotToPDF+25_0"; // activitatea shared de la Autodesk
-
-// URL de bază al proxy-ului tău (setat în Vercel env)
-const PROXY_BASE = process.env.NEXT_PUBLIC_PROXY_BASE || "https://proxy.cadconverts.com";
+const REGION = "us-east";
+const REGION_HEADER = { "x-ads-region": "US" };
 
 async function getApsToken(scopes = "code:all data:read data:write bucket:read bucket:create") {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env;
   if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
     throw new Error("Missing APS_CLIENT_ID/APS_CLIENT_SECRET");
   }
-  const form = new URLSearchParams({
+  const body = new URLSearchParams({
     client_id: APS_CLIENT_ID,
     client_secret: APS_CLIENT_SECRET,
     grant_type: "client_credentials",
@@ -25,19 +19,26 @@ async function getApsToken(scopes = "code:all data:read data:write bucket:read b
   const r = await fetch("https://developer.api.autodesk.com/authentication/v2/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: form,
+    body,
   });
-  if (!r.ok) throw new Error(`APS token failed: ${await r.text()}`);
-  return r.json(); // { access_token }
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
 }
 
-// doar ca sanity-check: obiectul există în bucket?
+function ownerFromEnv() {
+  const id = process.env.APS_CLIENT_ID;
+  if (!id) throw new Error("Missing APS_CLIENT_ID");
+  return id; // <clientId>.PlotToPDF
+}
+
 async function ensureObjectExists(access_token, bucket, objectKey) {
   const r = await fetch(
     `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}/details`,
-    { headers: { Authorization: `Bearer ${access_token}`, "x-ads-region": "US" } }
+    { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } }
   );
-  if (!r.ok) throw new Error(`object not found: ${await r.text()}`);
+  const t = await r.text();
+  if (!r.ok) throw new Error(`object not found: ${t}`);
+  return t ? JSON.parse(t) : {};
 }
 
 export default async function handler(req, res) {
@@ -51,40 +52,53 @@ export default async function handler(req, res) {
     if (!bucket || !objectKey) {
       return res.status(400).json({ error: "Missing bucket or objectKey" });
     }
-    const baseName = objectKey.replace(/\.[^.]+$/, "");
-    const resultKey = outKey || `${baseName}-plot.pdf`;
 
-    // 1) token APS
+    const baseName = objectKey.replace(/\.[^.]+$/, "");
+    const resultKey = outKey || `${baseName}-${Date.now()}.pdf`;
+
+    // 1) token
     const { access_token } = await getApsToken();
 
-    // 2) verifică inputul
+    // 2) validăm inputul
     await ensureObjectExists(access_token, bucket, objectKey);
 
-    // 3) construiește URL-urile prin PROXY (cu token ca query)
-    const qsIn  = new URLSearchParams({ bucket, objectKey, token: access_token }).toString();
-    const qsOut = new URLSearchParams({ bucket, objectKey: resultKey, token: access_token }).toString();
+    // 3) activitate DA shared
+    const activityId = "AutoCAD.PlotToPDF+25_0"; // activitatea publică
 
-    const INPUT_URL  = `${PROXY_BASE}/oss-download?${qsIn}`; // GET prin proxy (proxy pune Bearer către OSS)
-    const OUTPUT_URL = `${PROXY_BASE}/oss-upload?${qsOut}`;  // PUT prin proxy (proxy pune Bearer către OSS)
+    // 4) URL-uri: input din OSS cu Authorization header; output = PROXY (POST)
+    const inputUrl  = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(bucket)}/objects/${encodeURIComponent(objectKey)}`;
 
-    // 4) creează workitem pe activitatea shared (nu mai folosim id-ul personalizat)
+    // proxy public (domeniul tău) care va primi PDF-ul și îl urcă în OSS cu token server-to-server
+    const proxyBase = process.env.NEXT_PUBLIC_PROXY_BASE || "https://proxy.cadconverts.com"; // <- dacă nu ai subdomeniu, pune direct "https://<IP>:3000"
+    const ingestUrl = `${proxyBase}/ingest-pdf?bucket=${encodeURIComponent(bucket)}&objectKey=${encodeURIComponent(resultKey)}`;
+
     const wi = await fetch(`https://developer.api.autodesk.com/da/${REGION}/v3/workitems`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${access_token}`,
         "Content-Type": "application/json",
-        "x-ads-region": "US",
+        ...REGION_HEADER
       },
       body: JSON.stringify({
-        activityId: DA_ACTIVITY,
+        activityId,
         arguments: {
-          // AutoCAD.PlotToPDF+25_0 așteaptă:
-          // - HostDwg (GET)  -> fișierul DWG
-          // - Result  (PUT)  -> PDF-ul rezultat (nume local: result.pdf)
-          HostDwg:  { url: INPUT_URL,  verb: "get" },
-          Result:   { url: OUTPUT_URL, verb: "put" },
-        },
-      }),
+          HostDwg: {
+            url: inputUrl,
+            headers: {
+              Authorization: `Bearer ${access_token}`,
+              "x-ads-region": "US"
+            },
+            verb: "get"
+          },
+          Result: {
+            url: ingestUrl,
+            headers: {
+              "Content-Type": "application/pdf"
+            },
+            verb: "post" // foarte important: DA va POST-a PDF-ul la /ingest-pdf
+          }
+        }
+      })
     });
 
     const wiText = await wi.text();
@@ -92,14 +106,12 @@ export default async function handler(req, res) {
       return res.status(wi.status).json({ error: "workitem create failed", details: wiText });
     }
     const wiData = wiText ? JSON.parse(wiText) : {};
-
     return res.status(200).json({
       ok: true,
       workitemId: wiData.id || wiData.workitemId || null,
-      resultKey,
+      resultKey
     });
   } catch (e) {
-    console.error("plot-pdf error:", e);
     return res.status(500).json({ error: String(e?.message || e) });
   }
 }
