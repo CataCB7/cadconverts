@@ -1,9 +1,9 @@
 // pages/api/convert-start.js
-// Persistă statusul inițial în S3 prin PROXY /upload (bucket+objectKey+token)
+// Persistă statusul inițial în S3 prin PROXY /upload (bucket+objectKey+token) + DIAGNOSTIC
 
 import crypto from 'crypto'
 
-const PROXY_BASE_URL = process.env.PROXY_BASE_URL;            // ex: https://proxy.cadconverts.com
+const PROXY_BASE_URL = process.env.PROXY_BASE_URL;             // ex: https://proxy.cadconverts.com
 const APS_BUCKET     = process.env.APS_BUCKET || process.env.BUCKET_NAME; // numele bucketului OSS/S3
 
 async function getApsToken() {
@@ -40,9 +40,7 @@ async function saveInitialStatus({ jobId, method, filename, size }) {
   const bodyStr = JSON.stringify(statusObj);
   const contentLength = Buffer.byteLength(bodyStr);
 
-  // token APS — proxy-ul cere ?token= în query
-  const { access_token } = await getApsToken();
-
+  const { access_token } = await getApsToken(); // token APS pentru proxy
   const url = `${PROXY_BASE_URL}/upload?bucket=${encodeURIComponent(APS_BUCKET)}&objectKey=${encodeURIComponent(key)}&token=${encodeURIComponent(access_token)}`;
 
   const up = await fetch(url, {
@@ -57,7 +55,7 @@ async function saveInitialStatus({ jobId, method, filename, size }) {
   const txt = await up.text();
   if (!up.ok) throw new Error(`/upload failed: ${txt}`);
 
-  return { saved: true, key, size: contentLength };
+  return { saved: true, key, size: contentLength, proxy: PROXY_BASE_URL, bucket: APS_BUCKET };
 }
 
 export default async function handler(req, res) {
@@ -79,11 +77,18 @@ export default async function handler(req, res) {
     try {
       persist = await saveInitialStatus({ jobId, method, filename, size });
     } catch (e) {
-      // întoarcem cauza ca să o vezi în browser
       persist = { saved: false, error: String(e?.message || e) };
     }
 
-    return res.status(200).json({ ok: true, jobId, status: 'queued', method, received: { filename, size }, persist });
+    return res.status(200).json({
+      ok: true,
+      version: 'start@2.1',
+      jobId,
+      status: 'queued',
+      method,
+      received: { filename, size },
+      persist
+    });
   } catch (err) {
     console.error('[api/convert-start] error:', err);
     return res.status(500).json({ ok: false, error: 'Internal Server Error' });
