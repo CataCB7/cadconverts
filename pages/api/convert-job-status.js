@@ -1,23 +1,26 @@
 // pages/api/convert-job-status.js
-// Citește statusul jobului (jobs/{jobId}/status.json) din S3 via proxy (/upload → signed GET)
+// Citește jobs/{jobId}/status.json direct din Autodesk OSS (fără proxy)
 
-const PROXY_BASE_URL = process.env.PROXY_BASE_URL; // ex: https://proxy.cadconverts.com
+const APS_BUCKET = process.env.APS_BUCKET; // setat deja în Vercel
+const REGION_HEADER = { 'x-ads-region': 'US' };
 
-async function getSignedGetUrl(key) {
-  if (!PROXY_BASE_URL) throw new Error('Missing PROXY_BASE_URL');
-  const r = await fetch(`${PROXY_BASE_URL}/upload`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // cerem explicit URL semnat de GET
-    body: JSON.stringify({ key, method: 'GET', contentType: 'application/json' }),
+async function getApsToken() {
+  const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_SCOPES } = process.env;
+  if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) throw new Error('APS credentials missing');
+  const scopes = APS_SCOPES || 'data:read data:write bucket:read bucket:create';
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    scope: scopes,
+    client_id: APS_CLIENT_ID,
+    client_secret: APS_CLIENT_SECRET
   });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error(`/upload (GET signer) failed: ${t}`);
-  }
-  const j = await r.json();
-  // acceptăm mai multe denumiri posibile
-  return j.getUrl || j.downloadUrl || j.signedUrl || j.url;
+  const r = await fetch('https://developer.api.autodesk.com/authentication/v2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  });
+  if (!r.ok) throw new Error(`APS token failed: ${await r.text()}`);
+  return r.json(); // { access_token }
 }
 
 export default async function handler(req, res) {
@@ -26,39 +29,37 @@ export default async function handler(req, res) {
       res.setHeader('Allow', ['GET']);
       return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
     }
+    if (!APS_BUCKET) return res.status(500).json({ ok:false, error:'Missing APS_BUCKET' });
 
     const jobId = String(req.query.jobId || '').trim();
-    if (!jobId) return res.status(400).json({ ok: false, error: 'Missing jobId' });
+    if (!jobId) return res.status(400).json({ ok:false, error:'Missing jobId' });
 
-    const key = `jobs/${jobId}/status.json`;
+    const objectKey = `jobs/${jobId}/status.json`;
+    const { access_token } = await getApsToken();
 
-    let url;
-    try {
-      url = await getSignedGetUrl(key);
-    } catch (e) {
-      return res
-        .status(502)
-        .json({ ok: false, error: 'Proxy GET signer failed', detail: String(e?.message || e), key });
-    }
+    // GET direct din Autodesk OSS (conținutul fișierului)
+    const url = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(APS_BUCKET)}/objects/${encodeURIComponent(objectKey)}`;
+    const g = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } });
 
-    const g = await fetch(url);
     if (g.status === 404) {
-      return res.status(200).json({ ok: true, jobId, status: 'queued', missing: true });
+      // încă nu există => tratăm ca queued
+      return res.status(200).json({ ok:true, jobId, status:'queued', missing:true });
     }
     if (!g.ok) {
       const t = await g.text();
-      return res.status(g.status).json({ ok: false, error: 'GET status.json failed', detail: t });
+      return res.status(g.status).json({ ok:false, error:'OSS GET failed', detail:t });
     }
 
     const text = await g.text();
     try {
       const json = text ? JSON.parse(text) : {};
-      return res.status(200).json({ ok: true, ...json });
+      return res.status(200).json({ ok:true, ...json });
     } catch {
-      return res.status(200).json({ ok: true, raw: text });
+      // dacă cineva a scris non-JSON, returnăm raw pentru debug
+      return res.status(200).json({ ok:true, raw:text });
     }
   } catch (err) {
     console.error('[api/convert-job-status] error:', err);
-    return res.status(500).json({ ok: false, error: 'Internal Server Error' });
+    return res.status(500).json({ ok:false, error:'Internal Server Error' });
   }
 }
