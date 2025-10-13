@@ -1,7 +1,8 @@
 // pages/api/convert-job-status.js
-// Citește jobs/{jobId}/status.json direct din Autodesk OSS (fără proxy)
+// Citește jobs/{jobId}/status.json folosind URL semnat prin proxy (/download-sign)
 
-const APS_BUCKET = process.env.APS_BUCKET; // setat deja în Vercel
+const PROXY_BASE_URL = process.env.PROXY_BASE_URL;
+const APS_BUCKET = process.env.APS_BUCKET;
 const REGION_HEADER = { 'x-ads-region': 'US' };
 
 async function getApsToken() {
@@ -27,9 +28,10 @@ export default async function handler(req, res) {
   try {
     if (req.method !== 'GET') {
       res.setHeader('Allow', ['GET']);
-      return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+      return res.status(405).json({ ok:false, error:'Method Not Allowed' });
     }
-    if (!APS_BUCKET) return res.status(500).json({ ok:false, error:'Missing APS_BUCKET' });
+    if (!PROXY_BASE_URL) return res.status(500).json({ ok:false, error:'Missing PROXY_BASE_URL' });
+    if (!APS_BUCKET)     return res.status(500).json({ ok:false, error:'Missing APS_BUCKET' });
 
     const jobId = String(req.query.jobId || '').trim();
     if (!jobId) return res.status(400).json({ ok:false, error:'Missing jobId' });
@@ -37,17 +39,29 @@ export default async function handler(req, res) {
     const objectKey = `jobs/${jobId}/status.json`;
     const { access_token } = await getApsToken();
 
-    // GET direct din Autodesk OSS (conținutul fișierului)
-    const url = `https://developer.api.autodesk.com/oss/v2/buckets/${encodeURIComponent(APS_BUCKET)}/objects/${encodeURIComponent(objectKey)}`;
-    const g = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, ...REGION_HEADER } });
-
-    if (g.status === 404) {
-      // încă nu există => tratăm ca queued
+    // 1) Cerem URL semnat de download de la proxy
+    const signUrl = `${PROXY_BASE_URL}/download-sign?bucket=${encodeURIComponent(APS_BUCKET)}&objectKey=${encodeURIComponent(objectKey)}&token=${encodeURIComponent(access_token)}`;
+    const signResp = await fetch(signUrl, { headers: REGION_HEADER });
+    const signText = await signResp.text();
+    if (signResp.status === 404) {
+      // încă nu există fișierul -> queued
       return res.status(200).json({ ok:true, jobId, status:'queued', missing:true });
     }
+    if (!signResp.ok) {
+      return res.status(signResp.status).json({ ok:false, error:'Proxy signed download failed', detail: signText });
+    }
+    const signed = signText ? JSON.parse(signText) : {};
+    const downloadUrl = signed.url || (Array.isArray(signed.urls) && signed.urls[0]) || signed.downloadUrl;
+    if (!downloadUrl) {
+      return res.status(502).json({ ok:false, error:'Missing signed download url', raw:signed });
+    }
+
+    // 2) Descărcăm conținutul efectiv al status.json
+    const g = await fetch(downloadUrl);
+    if (g.status === 404) return res.status(200).json({ ok:true, jobId, status:'queued', missing:true });
     if (!g.ok) {
       const t = await g.text();
-      return res.status(g.status).json({ ok:false, error:'OSS GET failed', detail:t });
+      return res.status(g.status).json({ ok:false, error:'Download failed', detail:t });
     }
 
     const text = await g.text();
@@ -55,7 +69,6 @@ export default async function handler(req, res) {
       const json = text ? JSON.parse(text) : {};
       return res.status(200).json({ ok:true, ...json });
     } catch {
-      // dacă cineva a scris non-JSON, returnăm raw pentru debug
       return res.status(200).json({ ok:true, raw:text });
     }
   } catch (err) {
