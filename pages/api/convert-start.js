@@ -1,7 +1,8 @@
 // pages/api/convert-start.js
-// Persistă statusul inițial în S3 prin PROXY /upload (bucket+objectKey+token) + DIAGNOSTIC
+// Persistă statusul inițial în S3 prin PROXY /upload (bucket+objectKey+token) + RATE LIMIT + DIAGNOSTIC
 
 import crypto from 'crypto'
+import { getClientIp, checkAndConsume } from '../../lib/rateLimiter.js'
 
 const PROXY_BASE_URL = process.env.PROXY_BASE_URL;             // ex: https://proxy.cadconverts.com
 const APS_BUCKET     = process.env.APS_BUCKET || process.env.BUCKET_NAME; // numele bucketului OSS/S3
@@ -65,6 +66,21 @@ export default async function handler(req, res) {
       return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
     }
 
+    // --- Rate limit anonim: 2 conversii / 24h / IP ---
+    const ip = getClientIp(req);
+    const rl = await checkAndConsume(`ip:${ip}`, 2, 24 * 60 * 60);
+    if (!rl.ok) {
+      return res.status(429).json({
+        ok: false,
+        error: 'Rate limit exceeded',
+        message: 'Ai atins limita de conversii gratuite pentru azi. Revino mâine sau autentifică-te pentru mai multe.',
+        ip,
+        limit: 2,
+        remaining: rl.remaining,
+        resetAt: rl.resetAt
+      });
+    }
+
     const body = (req.body && typeof req.body === 'object') ? req.body : {};
     const preferHighQuality = !!body.preferHighQuality;
     const filename = body.filename ?? null;
@@ -82,11 +98,12 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      version: 'start@2.1',
+      version: 'start@2.2', // bump pentru a confirma noua versiune
       jobId,
       status: 'queued',
       method,
       received: { filename, size },
+      rateLimit: { ip, remaining: rl.remaining, resetAt: rl.resetAt },
       persist
     });
   } catch (err) {
