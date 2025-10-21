@@ -8,7 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@next-auth/upstash-redis-adapter": "^2.0.6",
+    "@next-auth/upstash-redis-adapter": "3.0.4",
     "@upstash/redis": "^1.31.6",
     "formidable": "3.5.1",
     "next": "14.1.0",
