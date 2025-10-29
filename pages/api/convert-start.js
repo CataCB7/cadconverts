@@ -2,8 +2,6 @@
 // Save initial status to S3 via PROXY /upload (bucket+objectKey+token) + RATE LIMIT (user or IP) + DIAGNOSTICS
 
 import crypto from 'crypto'
-import { getServerSession } from 'next-auth/next'
-import { authOptions } from './auth/[...nextauth]'
 import { getClientIp, checkAndConsume } from '../../lib/rateLimiter.js'
 
 const PROXY_BASE_URL = process.env.PROXY_BASE_URL;                    // e.g. https://proxy.cadconverts.com
@@ -63,13 +61,17 @@ async function saveInitialStatus({ jobId, method, filename, size }) {
 
 export default async function handler(req, res) {
   try {
-    // Allow GET for diagnostics so you don't get a 405 while testing
+    // Lightweight diagnostics GET — nu atinge next-auth deloc
     if (req.method === 'GET') {
       return res.status(200).json({
         ok: true,
-        version: 'start@2.4',
+        version: 'start@2.5',
         allow: ['POST'],
-        note: 'Use POST to create a job. GET is diagnostics only.'
+        note: 'Use POST to create a job. GET is diagnostics only.',
+        env: {
+          hasProxy: Boolean(PROXY_BASE_URL),
+          hasBucket: Boolean(APS_BUCKET),
+        }
       });
     }
 
@@ -77,6 +79,10 @@ export default async function handler(req, res) {
       res.setHeader('Allow', ['GET', 'POST']);
       return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
     }
+
+    // ⬇️ Mutăm importurile grele aici ca să nu crape pe GET
+    const { getServerSession } = await import('next-auth/next');
+    const { authOptions }     = await import('./auth/[...nextauth]');
 
     // --- Auth session (NextAuth) ---
     const session = await getServerSession(req, res, authOptions);
@@ -86,7 +92,7 @@ export default async function handler(req, res) {
     const ip = getClientIp(req);
     const isLoggedIn = Boolean(userEmail);
     const key = isLoggedIn ? `user:${userEmail}` : `ip:${ip}`;
-    const dailyLimit = isLoggedIn ? 10 : 2; // tweak as needed
+    const dailyLimit = isLoggedIn ? 10 : 2; // adjust as needed
     const ttlSeconds = 24 * 60 * 60;
 
     const rl = await checkAndConsume(key, dailyLimit, ttlSeconds);
@@ -126,7 +132,7 @@ export default async function handler(req, res) {
     // Response
     return res.status(200).json({
       ok: true,
-      version: 'start@2.4',
+      version: 'start@2.5',
       jobId,
       status: 'queued',
       method,
