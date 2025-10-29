@@ -6,7 +6,7 @@ import { getServerSession } from 'next-auth/next'
 import { authOptions } from './auth/[...nextauth]'
 import { getClientIp, checkAndConsume } from '../../lib/rateLimiter.js'
 
-const PROXY_BASE_URL = process.env.PROXY_BASE_URL;             // e.g. https://proxy.cadconverts.com
+const PROXY_BASE_URL = process.env.PROXY_BASE_URL;                    // e.g. https://proxy.cadconverts.com
 const APS_BUCKET     = process.env.APS_BUCKET || process.env.BUCKET_NAME; // OSS/S3 bucket name
 
 async function getApsToken() {
@@ -63,8 +63,18 @@ async function saveInitialStatus({ jobId, method, filename, size }) {
 
 export default async function handler(req, res) {
   try {
+    // Allow GET for diagnostics so you don't get a 405 while testing
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        ok: true,
+        version: 'start@2.4',
+        allow: ['POST'],
+        note: 'Use POST to create a job. GET is diagnostics only.'
+      });
+    }
+
     if (req.method !== 'POST') {
-      res.setHeader('Allow', ['POST']);
+      res.setHeader('Allow', ['GET', 'POST']);
       return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
     }
 
@@ -76,7 +86,7 @@ export default async function handler(req, res) {
     const ip = getClientIp(req);
     const isLoggedIn = Boolean(userEmail);
     const key = isLoggedIn ? `user:${userEmail}` : `ip:${ip}`;
-    const dailyLimit = isLoggedIn ? 10 : 2;               // you can tweak these numbers
+    const dailyLimit = isLoggedIn ? 10 : 2; // tweak as needed
     const ttlSeconds = 24 * 60 * 60;
 
     const rl = await checkAndConsume(key, dailyLimit, ttlSeconds);
@@ -95,14 +105,17 @@ export default async function handler(req, res) {
       });
     }
 
+    // Parse body
     const body = (req.body && typeof req.body === 'object') ? req.body : {};
     const preferHighQuality = !!body.preferHighQuality;
     const filename = body.filename ?? null;
     const size     = body.size ?? null;
 
+    // Create jobId + pick method
     const jobId  = (crypto.randomUUID ? crypto.randomUUID() : crypto.createHash('sha256').update(String(Date.now())+Math.random()).digest('hex').slice(0,36));
     const method = preferHighQuality ? 'da' : 'md';
 
+    // Persist initial status
     let persist = { saved: false };
     try {
       persist = await saveInitialStatus({ jobId, method, filename, size });
@@ -110,9 +123,10 @@ export default async function handler(req, res) {
       persist = { saved: false, error: String(e?.message || e) };
     }
 
+    // Response
     return res.status(200).json({
       ok: true,
-      version: 'start@2.3',
+      version: 'start@2.4',
       jobId,
       status: 'queued',
       method,
