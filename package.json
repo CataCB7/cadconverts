@@ -12,8 +12,7 @@
     "@upstash/redis": "^1.31.6",
     "formidable": "3.5.1",
     "next": "14.1.0",
-    "next-auth": "^4.24.7",
-    "nodemailer": "^6.9.14",
+    "next-auth": "4.24.7",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "undici": "^5.28.4"
