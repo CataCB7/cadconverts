@@ -1,11 +1,9 @@
-// pages/api/convert-start.js
-// Save initial status to S3 via PROXY /upload (bucket+objectKey+token) + RATE LIMIT (user or IP) + DIAGNOSTICS
-
+// pages/api/convert-start.js (DEBUG MODE)
 import crypto from 'crypto'
 import { getClientIp, checkAndConsume } from '../../lib/rateLimiter.js'
 
-const PROXY_BASE_URL = process.env.PROXY_BASE_URL;                    // e.g. https://proxy.cadconverts.com
-const APS_BUCKET     = process.env.APS_BUCKET || process.env.BUCKET_NAME; // OSS/S3 bucket name
+const PROXY_BASE_URL = process.env.PROXY_BASE_URL;
+const APS_BUCKET     = process.env.APS_BUCKET || process.env.BUCKET_NAME;
 
 async function getApsToken() {
   const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_SCOPES } = process.env;
@@ -23,12 +21,12 @@ async function getApsToken() {
     body,
   });
   if (!r.ok) throw new Error(`APS token failed: ${await r.text()}`);
-  return r.json(); // { access_token }
+  return r.json();
 }
 
 async function saveInitialStatus({ jobId, method, filename, size }) {
   if (!PROXY_BASE_URL) throw new Error('Missing PROXY_BASE_URL');
-  if (!APS_BUCKET)     throw new Error('Missing APS_BUCKET (bucket name)');
+  if (!APS_BUCKET)     throw new Error('Missing APS_BUCKET');
 
   const key = `jobs/${jobId}/status.json`;
   const statusObj = {
@@ -41,15 +39,12 @@ async function saveInitialStatus({ jobId, method, filename, size }) {
   const bodyStr = JSON.stringify(statusObj);
   const contentLength = Buffer.byteLength(bodyStr);
 
-  const { access_token } = await getApsToken(); // APS token for proxy
+  const { access_token } = await getApsToken();
   const url = `${PROXY_BASE_URL}/upload?bucket=${encodeURIComponent(APS_BUCKET)}&objectKey=${encodeURIComponent(key)}&token=${encodeURIComponent(access_token)}`;
 
   const up = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': String(contentLength),
-    },
+    headers: { 'Content-Type':'application/json','Content-Length': String(contentLength) },
     body: bodyStr,
   });
 
@@ -60,94 +55,94 @@ async function saveInitialStatus({ jobId, method, filename, size }) {
 }
 
 export default async function handler(req, res) {
+  const DEBUG = String(req.query?.debug ?? '').trim() === '1';
+
   try {
-    // Lightweight diagnostics GET — nu atinge next-auth deloc
     if (req.method === 'GET') {
       return res.status(200).json({
         ok: true,
-        version: 'start@2.5',
+        version: 'start@debug',
         allow: ['POST'],
-        note: 'Use POST to create a job. GET is diagnostics only.',
-        env: {
-          hasProxy: Boolean(PROXY_BASE_URL),
-          hasBucket: Boolean(APS_BUCKET),
-        }
+        env: { hasProxy: !!PROXY_BASE_URL, hasBucket: !!APS_BUCKET }
       });
     }
-
     if (req.method !== 'POST') {
-      res.setHeader('Allow', ['GET', 'POST']);
-      return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+      res.setHeader('Allow', ['GET','POST']);
+      return res.status(405).json({ ok:false, error:'Method Not Allowed' });
     }
 
-    // ⬇️ Mutăm importurile grele aici ca să nu crape pe GET
-    const { getServerSession } = await import('next-auth/next');
-    const { authOptions }     = await import('./auth/[...nextauth]');
+    // 1) Import next-auth LAZY
+    let session = null;
+    try {
+      const { getServerSession } = await import('next-auth/next');
+      const { authOptions }     = await import('./auth/[...nextauth]');
+      session = await getServerSession(req, res, authOptions);
+    } catch (e) {
+      if (DEBUG) return res.status(500).json({ ok:false, step:'import-auth', message:String(e?.message||e) });
+      throw e;
+    }
 
-    // --- Auth session (NextAuth) ---
-    const session = await getServerSession(req, res, authOptions);
+    // 2) Rate limit (Upstash)
     const userEmail = session?.user?.email ? String(session.user.email).toLowerCase() : null;
-
-    // --- Rate limit: logged-in users vs anonymous IPs ---
     const ip = getClientIp(req);
-    const isLoggedIn = Boolean(userEmail);
-    const key = isLoggedIn ? `user:${userEmail}` : `ip:${ip}`;
-    const dailyLimit = isLoggedIn ? 10 : 2; // adjust as needed
-    const ttlSeconds = 24 * 60 * 60;
+    const isLoggedIn = !!userEmail;
+    const rlKey = isLoggedIn ? `user:${userEmail}` : `ip:${ip}`;
+    const dailyLimit = isLoggedIn ? 10 : 2;
+    const ttlSeconds = 24*60*60;
 
-    const rl = await checkAndConsume(key, dailyLimit, ttlSeconds);
-    if (!rl.ok) {
+    let rl;
+    try {
+      rl = await checkAndConsume(rlKey, dailyLimit, ttlSeconds);
+    } catch (e) {
+      if (DEBUG) return res.status(500).json({ ok:false, step:'rate-limit', message:String(e?.message||e) });
+      throw e;
+    }
+    if (!rl?.ok) {
       return res.status(429).json({
-        ok: false,
-        error: 'Rate limit exceeded',
-        message: isLoggedIn
-          ? 'You have reached today’s free conversion limit for your account.'
-          : 'You have reached today’s free conversion limit for your IP. Sign in for higher limits.',
+        ok:false,
+        error:'Rate limit exceeded',
         scope: isLoggedIn ? 'user' : 'ip',
         identifier: isLoggedIn ? userEmail : ip,
         limit: dailyLimit,
-        remaining: rl.remaining,
-        resetAt: rl.resetAt
+        remaining: rl?.remaining ?? 0,
+        resetAt: rl?.resetAt ?? null
       });
     }
 
-    // Parse body
+    // 3) Parse body
     const body = (req.body && typeof req.body === 'object') ? req.body : {};
     const preferHighQuality = !!body.preferHighQuality;
     const filename = body.filename ?? null;
     const size     = body.size ?? null;
 
-    // Create jobId + pick method
-    const jobId  = (crypto.randomUUID ? crypto.randomUUID() : crypto.createHash('sha256').update(String(Date.now())+Math.random()).digest('hex').slice(0,36));
+    const jobId  = (crypto.randomUUID ? crypto.randomUUID() :
+      crypto.createHash('sha256').update(String(Date.now())+Math.random()).digest('hex').slice(0,36));
     const method = preferHighQuality ? 'da' : 'md';
 
-    // Persist initial status
-    let persist = { saved: false };
+    // 4) Persist status
+    let persist = { saved:false };
     try {
       persist = await saveInitialStatus({ jobId, method, filename, size });
     } catch (e) {
-      persist = { saved: false, error: String(e?.message || e) };
+      if (DEBUG) return res.status(500).json({ ok:false, step:'persist-status', message:String(e?.message||e) });
+      // în producție nu vrem să ardem detalii; dar tot întoarcem 200 ca să nu blocăm pasul următor
+      persist = { saved:false, error: 'persist failed' };
     }
 
-    // Response
+    // 5) Done
     return res.status(200).json({
-      ok: true,
-      version: 'start@2.5',
+      ok:true,
+      version: 'start@debug',
       jobId,
-      status: 'queued',
+      status:'queued',
       method,
-      received: { filename, size },
-      rateLimit: {
-        scope: isLoggedIn ? 'user' : 'ip',
-        identifier: isLoggedIn ? userEmail : ip,
-        limit: dailyLimit,
-        remaining: rl.remaining,
-        resetAt: rl.resetAt
-      },
+      received:{ filename, size },
+      rateLimit:{ scope:isLoggedIn?'user':'ip', identifier:isLoggedIn?userEmail:ip, limit:dailyLimit, remaining:rl.remaining, resetAt:rl.resetAt },
       persist
     });
+
   } catch (err) {
-    console.error('[api/convert-start] error:', err);
-    return res.status(500).json({ ok: false, error: 'Internal Server Error' });
+    console.error('[convert-start][FATAL]', err);
+    return res.status(500).json({ ok:false, error:'Internal Server Error' });
   }
 }
